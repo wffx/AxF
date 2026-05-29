@@ -1,6 +1,6 @@
-# 基于知识库的 AI 辅助 Fuzz 驱动生成平台
+# Knowledge-based multi-agent Fuzz harness generation platform
 
-Knowledge-Based AI-Assisted Fuzz Harness Generation Platform
+中文名称：基于知识库的多智能体 Fuzz Harness 生成平台
 
 本项目是一个基于知识库的 AI 辅助 `libFuzzer` harness 生成平台，目标是围绕 C/C++ 库构建“知识库 -> harness 生成 -> 种子生成 -> 执行 -> Crash/覆盖率分析 -> 反馈”的迭代闭环。
 

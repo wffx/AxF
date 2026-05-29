@@ -1,8 +1,10 @@
-# 基于知识库的 AI 辅助 libFuzzer Harness 生成平台架构文档
+# Knowledge-based multi-agent Fuzz harness generation platform
 
 ## 1. 文档目标
 
-本文档用于指导项目早期工程开发，目标是定义一个基于知识库的 AI 辅助 `libFuzzer` harness 生成平台的高层架构。
+本文档用于指导项目早期工程开发，目标是定义 Knowledge-based multi-agent Fuzz harness generation platform 的高层架构。
+
+中文名称：基于知识库的多智能体 Fuzz Harness 生成平台。
 
 本文中的 Fuzz harness 生成特指面向 `libFuzzer` 的 harness 生成，即生成符合如下入口形式的 C/C++ fuzz harness：
 
