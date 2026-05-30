@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AxF 控制台</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">知识驱动 Fuzz Harness 平台</p>
+        <h1>AxF 控制台</h1>
+      </div>
+      <div class="actions">
+        <button class="button ghost" id="refresh" type="button">刷新</button>
+        <button class="button primary" form="task-form" type="submit">新建任务</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <form id="task-form" autocomplete="off">
+          <section>
+            <div class="section-title">
+              <h2>目标代码</h2>
+              <span>本地路径</span>
+            </div>
+            <label>
+              源码根目录
+              <input name="repo" required />
+            </label>
+            <label>
+              BROWSE.VC.DB
+              <input name="db" placeholder="留空自动查找" />
+            </label>
+            <label>
+              函数名
+              <input name="function" required />
+            </label>
+            <label>
+              文件过滤
+              <input name="file" placeholder="net/can/af_can.c" />
+            </label>
+          </section>
+
+          <section>
+            <div class="section-title">
+              <h2>LLM 生成</h2>
+              <span>本地环境变量</span>
+            </div>
+            <label>
+              模型
+              <input name="model" placeholder="glm-5.1" />
+            </label>
+            <label>
+              Chat Completions URL
+              <input name="chat_url" placeholder="留空读取 CHAT_COMPLETIONS_URL" />
+            </label>
+            <label>
+              API Key 环境变量
+              <input name="api_key_env" placeholder="API_KEY" />
+            </label>
+            <label>
+              模型超时秒数
+              <input name="model_timeout" inputmode="numeric" />
+            </label>
+            <label>
+              模型重试次数
+              <input name="model_max_retries" inputmode="numeric" />
+            </label>
+            <label>
+              Clang 路径
+              <input name="clang" placeholder="留空使用 CLANG 或 clang" />
+            </label>
+            <label>
+              最大修复轮数
+              <input name="max_repair_rounds" inputmode="numeric" />
+            </label>
+            <label>
+              编译超时秒数
+              <input name="compile_timeout" inputmode="numeric" />
+            </label>
+          </section>
+
+          <section>
+            <div class="section-title">
+              <h2>kRepo 知识抽取</h2>
+              <span>产物</span>
+            </div>
+            <label class="check"><input type="checkbox" name="artifacts" value="report_md" />Markdown 报告</label>
+            <label class="check"><input type="checkbox" name="artifacts" value="report_json" />JSON 报告</label>
+            <label class="check"><input type="checkbox" name="artifacts" value="subsource" />下游源码包</label>
+            <label class="check"><input type="checkbox" name="artifacts" value="source" />源码分析包</label>
+            <label class="check"><input type="checkbox" name="artifacts" value="calls" />上层调用链</label>
+            <label class="check"><input type="checkbox" name="artifacts" value="params" />入参约束</label>
+          </section>
+
+          <section>
+            <div class="section-title">
+              <h2>AxF 后续流程</h2>
+              <span>Agent</span>
+            </div>
+            <label class="check"><input type="checkbox" name="artifacts" value="harness_generation_agent" />生成 Fuzz Harness</label>
+          </section>
+
+          <section class="grid">
+            <div class="section-title wide">
+              <h2>kRepo 抽取限制</h2>
+              <span>默认即可</span>
+            </div>
+            <label>
+              依赖上限
+              <input name="max_deps" inputmode="numeric" />
+            </label>
+            <label>
+              片段行数
+              <input name="max_snippet_lines" inputmode="numeric" />
+            </label>
+            <label>
+              下游深度
+              <input name="max_depth" inputmode="numeric" />
+            </label>
+            <label>
+              函数上限
+              <input name="max_functions" inputmode="numeric" />
+            </label>
+            <label>
+              调用链深度
+              <input name="call_depth" inputmode="numeric" />
+            </label>
+            <label>
+              同名候选上限
+              <input name="max_candidates" inputmode="numeric" />
+            </label>
+          </section>
+        </form>
+      </aside>
+
+      <section class="content">
+        <div class="summary">
+          <div>
+            <p class="eyebrow">当前任务</p>
+            <h2 id="task-title">未开始</h2>
+          </div>
+          <div class="actions">
+            <span id="status" class="badge idle">空闲</span>
+            <button id="cancel" class="button danger" type="button" disabled>停止</button>
+          </div>
+        </div>
+
+        <div class="tabs">
+          <button class="tab active" data-tab="events" type="button">事件</button>
+          <button class="tab" data-tab="logs" type="button">日志</button>
+          <button class="tab" data-tab="artifacts" type="button">产物</button>
+          <button class="tab" data-tab="tasks" type="button">任务</button>
+        </div>
+
+        <section id="tab-events" class="panel active">
+          <pre id="events-view">等待任务事件...</pre>
+        </section>
+
+        <section id="tab-logs" class="panel">
+          <pre id="logs-view">等待命令日志...</pre>
+        </section>
+
+        <section id="tab-artifacts" class="panel">
+          <div id="artifact-list" class="artifact-list"></div>
+          <pre id="artifact-view">任务完成后选择产物查看。</pre>
+        </section>
+
+        <section id="tab-tasks" class="panel">
+          <div id="task-list" class="task-list"></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

@@ -89,9 +89,11 @@ def find_functions(
     params: list[object] = [name]
     where = "ci.kind = 27 and ci.name = ?"
     if file_filter:
-        file_filter = file_filter.replace("/", "\\").replace("\\\\", "\\")
-        where += " and lower(f.name) like ?"
-        params.append("%" + file_filter.lower() + "%")
+        slash_filter = file_filter.replace("\\", "/")
+        backslash_filter = file_filter.replace("/", "\\").replace("\\\\", "\\")
+        filters = sorted({slash_filter.lower(), backslash_filter.lower()})
+        where += " and (" + " or ".join("lower(f.name) like ?" for _ in filters) + ")"
+        params.extend("%" + value + "%" for value in filters)
     rows = con.execute(
         item_query(where)
         + " order by (ci.end_line - ci.start_line) desc, ci.start_line",
@@ -158,4 +160,3 @@ def find_enclosing_function(con: sqlite3.Connection, file_path: str, line: int) 
     if not rows:
         return None
     return row_to_item(rows[0])
-
