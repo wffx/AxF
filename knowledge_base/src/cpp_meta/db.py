@@ -4,7 +4,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from .models import CodeItem, KIND
+from .models import CodeItem, INTERESTING_KINDS, KIND
 
 
 _FILE_ID_CACHE: dict[str, int | None] = {}
@@ -89,14 +89,48 @@ def find_functions(
     params: list[object] = [name]
     where = "ci.kind = 27 and ci.name = ?"
     if file_filter:
-        slash_filter = file_filter.replace("\\", "/")
-        backslash_filter = file_filter.replace("/", "\\").replace("\\\\", "\\")
-        filters = sorted({slash_filter.lower(), backslash_filter.lower()})
-        where += " and (" + " or ".join("lower(f.name) like ?" for _ in filters) + ")"
-        params.extend("%" + value + "%" for value in filters)
+        file_filter = file_filter.replace("/", "\\").replace("\\\\", "\\")
+        where += " and lower(f.name) like ?"
+        params.append("%" + file_filter.lower() + "%")
     rows = con.execute(
         item_query(where)
         + " order by (ci.end_line - ci.start_line) desc, ci.start_line",
+        params,
+    ).fetchall()
+    return [row_to_item(row) for row in rows]
+
+
+def find_symbols(
+    con: sqlite3.Connection,
+    name: str,
+    file_filter: str | None = None,
+    kinds: tuple[int, ...] = INTERESTING_KINDS,
+) -> list[CodeItem]:
+    params: list[object] = [*kinds, name]
+    placeholders = ",".join("?" for _ in kinds)
+    where = f"ci.kind in ({placeholders}) and ci.name = ?"
+    if file_filter:
+        file_filter = file_filter.replace("/", "\\").replace("\\\\", "\\")
+        where += " and lower(f.name) like ?"
+        params.append("%" + file_filter.lower() + "%")
+    rows = con.execute(
+        item_query(where)
+        + """
+        order by
+            case ci.kind
+                when 37 then 1
+                when 21 then 2
+                when 4 then 3
+                when 8 then 4
+                when 28 then 5
+                when 2 then 6
+                when 3 then 7
+                else 99
+            end,
+            (ci.end_line - ci.start_line) desc,
+            lower(f.name),
+            ci.start_line
+        """,
         params,
     ).fetchall()
     return [row_to_item(row) for row in rows]

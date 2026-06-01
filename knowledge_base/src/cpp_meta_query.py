@@ -15,8 +15,10 @@ from src.cpp_meta import (
     analyze_function,
     export_source_bundle,
     export_subfunction_source_bundle,
+    lookup_symbol_source,
     print_function_call_sequence,
     print_function_param_constraints,
+    print_symbol_source,
 )
 from src.cpp_meta.cli import main
 
@@ -25,8 +27,10 @@ __all__ = [
     "analyze_function",
     "export_source_bundle",
     "export_subfunction_source_bundle",
+    "lookup_symbol_source",
     "print_function_call_sequence",
     "print_function_param_constraints",
+    "print_symbol_source",
     "main",
 ]
 

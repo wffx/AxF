@@ -6,6 +6,7 @@ from dataclasses import asdict
 
 from .calls import CALL_RE
 from .db import item_query, row_to_item
+from .filters import exclude_test_symbol_items
 from .models import C_KEYWORDS, DEPENDENCY_GROUP_NAMES, INTERESTING_KINDS, CodeItem
 from .parsing import (
     discover_local_names,
@@ -63,6 +64,7 @@ def lookup_items_for_tokens(
     function_item: CodeItem,
     source_text: str,
     kinds: tuple[int, ...] = INTERESTING_KINDS,
+    exclude_test_symbols: bool = False,
 ) -> list[CodeItem]:
     if not tokens:
         return []
@@ -76,6 +78,9 @@ def lookup_items_for_tokens(
             (*kinds, *names),
         ).fetchall()
         found.extend(row_to_item(row) for row in rows)
+
+    if exclude_test_symbols:
+        found = exclude_test_symbol_items(found)
 
     best_by_name_kind: dict[tuple[str, str], CodeItem] = {}
     for item in found:
@@ -113,8 +118,6 @@ def classify_dependencies(
             groups["typedefs"].append(item)
         elif item.kind in ("enum", "enumerator"):
             groups["enums"].append(item)
-            if item.kind == "enumerator":
-                groups["constants"].append(item)
         elif item.kind == "macro_define":
             groups["constants"].append(item)
         elif item.kind == "variable":
@@ -153,6 +156,7 @@ def lookup_nested_type_items(
     con: sqlite3.Connection,
     source: str,
     function_item: CodeItem,
+    exclude_test_symbols: bool = False,
 ) -> list[CodeItem]:
     tag_tokens = extract_tag_type_tokens(source)
     typedef_tokens = tokens_from_source(source)
@@ -167,6 +171,7 @@ def lookup_nested_type_items(
                 function_item,
                 source,
                 kinds=(2, 3, 4),
+                exclude_test_symbols=exclude_test_symbols,
             )
         )
     if typedef_tokens:
@@ -177,6 +182,7 @@ def lookup_nested_type_items(
                 function_item,
                 source,
                 kinds=(21,),
+                exclude_test_symbols=exclude_test_symbols,
             )
         )
 
@@ -212,6 +218,7 @@ def expand_nested_type_dependencies(
     dependencies: dict[str, list[CodeItem]],
     function_item: CodeItem,
     max_depth: int,
+    exclude_test_symbols: bool = False,
 ) -> dict[str, list[CodeItem]]:
     if max_depth <= 0:
         return dependencies
@@ -234,7 +241,12 @@ def expand_nested_type_dependencies(
             continue
         nested_items = [
             nested
-            for nested in lookup_nested_type_items(con, item_source, function_item)
+            for nested in lookup_nested_type_items(
+                con,
+                item_source,
+                function_item,
+                exclude_test_symbols=exclude_test_symbols,
+            )
             if nested.name != item.name
         ]
         for nested in nested_items:
@@ -253,6 +265,7 @@ def collect_function_dependencies(
     *,
     expand_nested_types: bool = False,
     max_nesting_depth: int = 4,
+    exclude_test_symbols: bool = False,
 ) -> dict[str, list[CodeItem]]:
     tokens = tokens_from_source(source)
     param_names = {param.name for param in params if param.name}
@@ -277,7 +290,13 @@ def collect_function_dependencies(
         re.findall(r"\b(?:struct|union|enum)\s+([A-Za-z_]\w*)\b", strip_comments_and_strings(source))
     )
     dependencies = classify_dependencies(
-        lookup_items_for_tokens(con, tokens, function_item, source),
+        lookup_items_for_tokens(
+            con,
+            tokens,
+            function_item,
+            source,
+            exclude_test_symbols=exclude_test_symbols,
+        ),
         local_names,
         type_names,
     )
@@ -287,6 +306,7 @@ def collect_function_dependencies(
             dependencies,
             function_item,
             max_nesting_depth,
+            exclude_test_symbols=exclude_test_symbols,
         )
     return dependencies
 def item_to_dict(item: CodeItem, max_snippet_lines: int) -> dict[str, object]:

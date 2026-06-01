@@ -11,7 +11,7 @@ VS Code C/C++ 插件 `vscode-cpptools` 生成的 SQLite 元数据库
 
 ## 归档来源与裁剪
 
-当前 `knowledge_base/src/` 下的初始实现来自 `https://github.com/wffx/kRepo`，归档时对应提交为 `9c0b249`。
+当前 `knowledge_base/src/` 下的实现来自 `https://github.com/wffx/kRepo`，最近一次同步对应提交为 `f3783c1`。
 
 归档后已按主工程目录约定做了整理：
 
@@ -41,6 +41,7 @@ VS Code C/C++ 插件 `vscode-cpptools` 生成的 SQLite 元数据库
 
 - 函数源码和依赖代码片段：宏、常量、typedef、枚举、全局变量、静态变量、
   结构体、嵌套结构体、目标函数源码和下游子函数源码。
+- 符号源码片段：按宏、typedef、枚举、变量、结构体、union 等非函数符号名检索源码片段。
 - 上层调用链：按 `a -> b -> target` 形式展示目标函数被哪些上层函数调用。
 - 入参约束：根据函数体上下文推断参数类型、指针属性、用户态指针、范围检查、
   常量约束和关键证据行。
@@ -90,16 +91,20 @@ knowledge_base/
       calls.py                 调用点解析、上游/下游调用图搜索
       params.py                入参约束推断
       engine.py                公共分析报告聚合
+      filters.py               测试目录、辅助调用等候选过滤策略
       source_bundle.py         功能 1：单函数源码分析包
       call_chains.py           功能 2：上层调用链
       param_constraints.py     功能 3：入参约束
       subfunction_bundle.py    功能 4：目标函数和下游子函数分析包
+      symbol_lookup.py         功能 5：非函数符号源码片段检索
       renderer.py              Markdown/.c 输出渲染
       cli.py                   argparse 命令行装配
 docs/
   api/
     knowledge_base/
       cpp_meta_query.md      cpp_meta_query CLI 和 Python API 文档
+      api_implementation_details.md
+                             API 实现细节、符号歧义和去重策略
   knowledge_base/
     README.md                组件说明
 tests/
@@ -131,6 +136,7 @@ python .\knowledge_base\src\cpp_meta_query.py subsource --help
 python .\knowledge_base\src\cpp_meta_query.py calls --help
 python .\knowledge_base\src\cpp_meta_query.py params --help
 python .\knowledge_base\src\cpp_meta_query.py report --help
+python .\knowledge_base\src\cpp_meta_query.py symbol --help
 ```
 
 指定函数导出 `.c` 分析包：
@@ -164,13 +170,20 @@ python .\knowledge_base\src\cpp_meta_query.py subsource parse_config --repo .\my
 python .\knowledge_base\src\cpp_meta_query.py subsource parse_config --repo .\my_project --file src\config.c --include-auxiliary-calls
 ```
 
+查询非函数符号源码片段：
+
+```powershell
+python .\knowledge_base\src\cpp_meta_query.py symbol MY_MACRO --repo .\my_project --kind macro
+python .\knowledge_base\src\cpp_meta_query.py symbol my_struct --repo .\my_project --kind struct --file include\types.h
+```
+
 显式指定元数据库：
 
 ```powershell
 python .\knowledge_base\src\cpp_meta_query.py calls parse_config --db .\my_project\.vscode\BROWSE.VC.DB --file src\config.c
 ```
 
-## 四个核心能力
+## 五个核心能力
 
 ### 1. source
 
@@ -201,6 +214,8 @@ python .\knowledge_base\src\cpp_meta_query.py calls parse_config --db .\my_proje
 默认会跳过日志、trace、debug、统计/accounting、instrumentation 等辅助函数，
 例如 `add_rchar`、`inc_syscr` 这类统计调用；生成文件会在
 `Skipped auxiliary callees` 段落中记录跳过项。
+同时会排除 `test`、`tests`、`testing`、`selftests`、`DT`、`ST` 等测试目录下的符号索引，
+并对最终输出中的重复依赖和重复函数定义做去重。
 
 ### 3. calls
 
@@ -223,6 +238,18 @@ upper_func -> middle_func -> target_func
 - 参数是否参与大小、范围、flag、NULL 判断。
 - 相关源码证据行。
 
+### 5. symbol
+
+`symbol` 根据非函数符号名检索源码片段，并直接打印到终端，不写文件。适用于宏定义、
+typedef、枚举、枚举值、全局变量、静态变量、结构体和 union 等符号。
+
+```powershell
+python .\knowledge_base\src\cpp_meta_query.py symbol MY_MACRO --repo .\my_project --kind macro
+```
+
+如果同名符号在数据库中出现多次，`symbol` 会按候选顺序打印多个片段，可通过
+`--kind` 和 `--file` 收窄范围。
+
 ## Python API
 
 核心能力也可以作为 Python API 使用：
@@ -231,8 +258,10 @@ upper_func -> middle_func -> target_func
 from src.cpp_meta_query import (
     export_source_bundle,
     export_subfunction_source_bundle,
+    lookup_symbol_source,
     print_function_call_sequence,
     print_function_param_constraints,
+    print_symbol_source,
 )
 
 export_source_bundle(
@@ -261,6 +290,12 @@ print_function_param_constraints(
     repo=r".\my_project",
     file_filter=r"src\config.c",
 )
+
+symbol_report = lookup_symbol_source(
+    "MY_MACRO",
+    repo=r".\my_project",
+    kind="macro",
+)
 ```
 
 ## 验证
@@ -276,7 +311,9 @@ python -m unittest tests.knowledge_base.test_cpp_meta_query -v
 - 函数定位和源码读取。
 - `.c` 分析包导出。
 - 目标函数和下游子函数 `.c` 分析包导出。
+- 非函数符号源码片段检索。
 - 嵌套结构体递归解析。
+- 测试目录过滤、辅助调用过滤和重复定义去重。
 - 上层调用链输出。
 - 入参约束输出。
 
@@ -301,6 +338,7 @@ python .\knowledge_base\src\cpp_meta_query.py calls can_send --repo .\linux-7.0 
 这些案例用于验证工具可处理大型 C 工程，并不代表工具只支持 Linux。
 
 更多命令、参数和接口说明见
-[cpp_meta_query API 文档](../api/knowledge_base/cpp_meta_query.md)。
+[cpp_meta_query API 文档](../api/knowledge_base/cpp_meta_query.md)；实现细节、符号歧义和去重策略见
+[cpp_meta_query API 实现细节](../api/knowledge_base/api_implementation_details.md)。
 
 

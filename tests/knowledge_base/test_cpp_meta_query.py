@@ -15,17 +15,26 @@ from src.cpp_meta_query import (
     analyze_function,
     export_source_bundle,
     export_subfunction_source_bundle,
+    lookup_symbol_source,
     print_function_call_sequence,
     print_function_param_constraints,
+    print_symbol_source,
 )
+from src.cpp_meta.base import QueryOptions
+from src.cpp_meta.filters import is_test_symbol_path
+from src.cpp_meta.report import ReportCommand
+from src.cpp_meta.renderer import render_subfunction_c_bundle
+
+
+TEST_REPO = os.environ.get("KREPO_TEST_REPO", "linux-7.0")
 
 
 @unittest.skipUnless(
-    Path(os.environ.get("KREPO_TEST_REPO", "linux-7.0")).exists(),
-    "requires a local Linux source tree with .vscode/BROWSE.VC.DB; set KREPO_TEST_REPO to override",
+    Path(TEST_REPO).exists(),
+    f"requires KREPO_TEST_REPO fixture or local {TEST_REPO}",
 )
 class CppMetaQuerySmokeTest(unittest.TestCase):
-    repo = os.environ.get("KREPO_TEST_REPO", "linux-7.0")
+    repo = TEST_REPO
 
     def test_analyze_function_finds_vfs_read(self) -> None:
         report = analyze_function(
@@ -89,6 +98,8 @@ class CppMetaQuerySmokeTest(unittest.TestCase):
         self.assertIn("rw_verify_area", text)
         self.assertIn("vfs_read", text)
         self.assertIn("Skipped auxiliary callees", text)
+        self.assertNotIn("TOOLS\\TESTING", text.upper())
+        self.assertNotIn("SELFTESTS", text.upper())
         self.assertNotRegex(text, r"/\* \[\d+\] add_rchar")
         self.assertNotRegex(text, r"/\* \[\d+\] inc_syscr")
 
@@ -105,6 +116,150 @@ class CppMetaQuerySmokeTest(unittest.TestCase):
         text = stdout.getvalue()
         self.assertIn("Parameter: buf", text)
         self.assertIn("__user", text)
+
+    def test_symbol_lookup_prints_non_function_snippet(self) -> None:
+        report = lookup_symbol_source(
+            "EINVAL",
+            repo=self.repo,
+            kind="macro",
+            max_candidates=3,
+            max_snippet_lines=2,
+        )
+        self.assertGreater(report["total_candidates"], 0)
+        self.assertEqual(report["candidates"][0]["kind"], "macro_define")
+        self.assertIn("EINVAL", report["candidates"][0]["snippet"])
+
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            print_symbol_source(
+                "EINVAL",
+                repo=self.repo,
+                kind="macro",
+                max_candidates=1,
+                max_snippet_lines=2,
+            )
+        text = stdout.getvalue()
+        self.assertIn("Symbol: EINVAL", text)
+        self.assertIn("macro_define EINVAL", text)
+        self.assertIn("#define", text)
+
+    def test_report_combines_public_feature_outputs(self) -> None:
+        report = ReportCommand(
+            QueryOptions(
+                repo=self.repo,
+                file_filter=r"fs\read_write.c",
+                max_deps=20,
+                max_snippet_lines=6,
+            )
+        ).build("vfs_read")
+        self.assertEqual(report["report_kind"], "unified")
+        self.assertIn("call_chains", report)
+        self.assertIn("subfunction_bundle", report)
+
+        structures = {item["name"] for item in report["dependencies"]["structures"]}
+        self.assertIn("file", structures)
+        self.assertIn("file_operations", structures)
+
+        params = {item["name"]: item for item in report["param_constraints"]}
+        self.assertIn("buf", params)
+        self.assertIn("__user", params["buf"]["type"])
+
+        functions = report["subfunction_bundle"]["functions"]
+        function_names = {item["item"]["name"] for item in functions}
+        self.assertIn("vfs_read", function_names)
+        self.assertIn("rw_verify_area", function_names)
+        self.assertTrue(functions[0]["source_omitted"])
+        self.assertIn("source_location", functions[0])
+
+    def test_test_symbol_path_filter_matches_common_test_dirs(self) -> None:
+        self.assertTrue(is_test_symbol_path(r"F:\repo\tools\testing\selftests\foo.c"))
+        self.assertTrue(is_test_symbol_path(r"F:\repo\DT\case.c"))
+        self.assertTrue(is_test_symbol_path(r"F:\repo\ST\case.c"))
+        self.assertFalse(is_test_symbol_path(r"F:\repo\src\core\foo.c"))
+
+    def test_subfunction_bundle_renders_duplicate_definitions_once(self) -> None:
+        report = {
+            "selected": {
+                "name": "target",
+                "file": "src/main.c",
+                "start_line": 10,
+                "end_line": 20,
+            },
+            "limits": {
+                "max_depth": 1,
+                "max_functions": 10,
+                "max_nesting_depth": 4,
+                "include_auxiliary": False,
+                "exclude_test_symbols": True,
+            },
+            "skipped_auxiliary_calls": [],
+            "dependencies": {
+                "constants": [
+                    {
+                        "id": 1,
+                        "kind": "macro_define",
+                        "name": "FOO",
+                        "file": "include/a.h",
+                        "start_line": 1,
+                        "snippet": "#define FOO 1",
+                    },
+                    {
+                        "id": 2,
+                        "kind": "macro_define",
+                        "name": "FOO",
+                        "file": "include/b.h",
+                        "start_line": 2,
+                        "snippet": "#define FOO 1",
+                    },
+                ],
+                "typedefs": [],
+                "enums": [],
+                "global_variables": [],
+                "static_variables": [],
+                "structures": [
+                    {
+                        "id": 3,
+                        "kind": "struct",
+                        "name": "shared",
+                        "file": "include/a.h",
+                        "start_line": 3,
+                        "snippet": "struct shared { int x; };",
+                    },
+                    {
+                        "id": 4,
+                        "kind": "struct",
+                        "name": "shared",
+                        "file": "include/b.h",
+                        "start_line": 4,
+                        "snippet": "struct shared { int x; };",
+                    },
+                ],
+            },
+            "functions": [
+                {
+                    "item": {
+                        "name": "helper",
+                        "file": "src/a.c",
+                        "start_line": 1,
+                        "end_line": 3,
+                    },
+                    "source": "int helper(void) { return FOO; }",
+                },
+                {
+                    "item": {
+                        "name": "helper",
+                        "file": "src/b.c",
+                        "start_line": 1,
+                        "end_line": 3,
+                    },
+                    "source": "int helper(void) { return FOO; }",
+                },
+            ],
+        }
+        text = render_subfunction_c_bundle(report)
+        self.assertEqual(text.count("#define FOO 1"), 1)
+        self.assertEqual(text.count("struct shared { int x; };"), 1)
+        self.assertEqual(text.count("int helper(void) { return FOO; }"), 1)
 
 
 if __name__ == "__main__":

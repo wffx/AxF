@@ -8,6 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .db import find_enclosing_function, resolve_function
+from .filters import is_test_symbol_path
 from .models import CONTROL_WORDS, CallSite, CallerSite, CodeItem
 from .parsing import chunked, source_slice, strip_comments_and_strings
 
@@ -417,6 +418,8 @@ def collect_downstream_functions(
                 continue
             callee = resolve_function(con, call.callee, function_item.file)
             if callee is None or callee.id == function_item.id:
+                continue
+            if is_test_symbol_path(callee.file):
                 continue
             if callee.span <= 0:
                 continue

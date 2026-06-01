@@ -16,6 +16,7 @@ from .engine import (
     source_slice,
     discover_calls,
 )
+from .filters import exclude_test_symbol_items
 from .renderer import default_bundle_path, render_subfunction_c_bundle
 
 
@@ -56,6 +57,7 @@ class SubfunctionBundleCommand(CppMetaCommand):
                     params,
                     expand_nested_types=False,
                     max_nesting_depth=max_nesting_depth,
+                    exclude_test_symbols=True,
                 )
                 merge_dependency_groups(dependencies, function_deps, seen_dependency_ids)
                 function_reports.append(
@@ -81,7 +83,12 @@ class SubfunctionBundleCommand(CppMetaCommand):
                 dependencies,
                 target,
                 max_nesting_depth,
+                exclude_test_symbols=True,
             )
+            dependencies = {
+                group_name: exclude_test_symbol_items(items)
+                for group_name, items in dependencies.items()
+            }
 
             return {
                 "selected": asdict(target),
@@ -102,10 +109,12 @@ class SubfunctionBundleCommand(CppMetaCommand):
                     "max_deps": self.options.max_deps,
                     "max_nesting_depth": max_nesting_depth,
                     "include_auxiliary": include_auxiliary,
+                    "exclude_test_symbols": True,
                 },
                 "notes": [
                     "子函数集合来自源码直接调用启发式解析；函数指针和成员调用保留但不强行解析。",
                     "默认跳过日志、trace、debug、统计/accounting、instrumentation 等辅助调用。",
+                    "默认排除 test/tests/testing/selftests/dt/st 等测试目录中的符号索引，避免测试符号混入导致重定义。",
                     "输出中的依赖片段和函数体会尽量按先定义后引用排序。",
                 ],
             }
