@@ -70,6 +70,7 @@ const ARTIFACT_LABELS = {
 };
 
 const KREPO_ARTIFACTS = new Set(["report_md", "report_json", "source", "subsource", "calls", "params"]);
+const HARNESS_CONTEXT_INPUTS = new Set(["report_json", "subsource", "calls", "params"]);
 const HARNESS_ARTIFACTS = new Set([
   "harness_generation_agent",
   "fuzz_harness",
@@ -128,6 +129,7 @@ function applyDefaults(defaults) {
   for (const input of form.querySelectorAll('input[name="artifacts"]')) {
     input.checked = selected.has(input.value);
   }
+  syncArtifactNotes();
 }
 
 function readConfig() {
@@ -140,6 +142,48 @@ function readConfig() {
   }
   config.artifacts = data.getAll("artifacts");
   return config;
+}
+
+function syncArtifactNotes() {
+  const wantsHarness = artifactInput("harness_generation_agent")?.checked || false;
+  for (const input of form.querySelectorAll('input[name="artifacts"]')) {
+    if (!KREPO_ARTIFACTS.has(input.value)) {
+      continue;
+    }
+    const label = input.closest(".check");
+    if (!label) {
+      continue;
+    }
+    label.classList.toggle("harness-context", wantsHarness && HARNESS_CONTEXT_INPUTS.has(input.value));
+    const note = ensureCheckNote(label);
+    if (!wantsHarness) {
+      note.textContent = "";
+      note.hidden = true;
+      continue;
+    }
+    note.hidden = false;
+    if (input.checked && HARNESS_CONTEXT_INPUTS.has(input.value)) {
+      note.textContent = "会生成，并加入 Harness prompt";
+    } else if (input.checked) {
+      note.textContent = "会生成，不加入 Harness prompt";
+    } else {
+      note.textContent = "不生成，也不加入 Harness prompt";
+    }
+  }
+}
+
+function artifactInput(value) {
+  return form.querySelector(`input[name="artifacts"][value="${value}"]`);
+}
+
+function ensureCheckNote(label) {
+  let note = label.querySelector(".check-note");
+  if (!note) {
+    note = document.createElement("span");
+    note.className = "check-note";
+    label.appendChild(note);
+  }
+  return note;
 }
 
 function setTask(task) {
@@ -568,6 +612,10 @@ refreshButton.addEventListener("click", async () => {
 
 for (const tab of document.querySelectorAll(".tab")) {
   tab.addEventListener("click", () => switchTab(tab.dataset.tab));
+}
+
+for (const input of form.querySelectorAll('input[name="artifacts"]')) {
+  input.addEventListener("change", syncArtifactNotes);
 }
 
 (async function init() {

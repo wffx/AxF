@@ -198,7 +198,12 @@ class TaskStore:
                 self._set(task_id, status="failed", returncode=1, error=failure)
                 self._event(task_id, "failed", failure, artifact=step.artifact_name)
                 return
-            self._event(task_id, step.name, f"{_artifact_label(step.artifact_name)} 已完成", artifact=step.artifact_name)
+            self._event(
+                task_id,
+                step.name,
+                f"{_artifact_label(step.artifact_name)} 已完成",
+                artifact=step.artifact_name,
+            )
 
         self._set(task_id, status="completed", returncode=0)
         self._event(task_id, "complete", _completion_message(task.task_dir))
@@ -252,25 +257,29 @@ def build_steps(config: dict[str, Any], task_dir: Path) -> list[PipelineStep]:
         steps.append(
             _capture_step("report_md", task_dir / "report.md", ["report", function, *common])
         )
-    if "report_json" in selected or wants_harness_agent:
+    if "report_json" in selected:
         steps.append(
-            _capture_step("report_json", task_dir / "report.json", ["report", function, *common, "--format", "json"])
+            _capture_step(
+                "report_json",
+                task_dir / "report.json",
+                ["report", function, *common, "--format", "json"],
+            )
         )
     if "source" in selected:
         output = task_dir / f"{function}_source_bundle.c"
         command = _base_command("source", function, *common, "--output", str(output))
         steps.append(PipelineStep("source", command, "source", output, capture_stdout=False))
-    if "subsource" in selected or wants_harness_agent:
+    if "subsource" in selected:
         output = task_dir / f"{function}_subsource_bundle.c"
         command = _base_command("subsource", function, *common, "--output", str(output))
         _add_optional(command, "--max-depth", config.get("max_depth"))
         _add_optional(command, "--max-functions", config.get("max_functions"))
         steps.append(PipelineStep("subsource", command, "subsource", output, capture_stdout=False))
-    if "calls" in selected or wants_harness_agent:
+    if "calls" in selected:
         command = ["calls", function, *common]
         _add_optional(command, "--max-depth", config.get("call_depth"))
         steps.append(_capture_step("calls", task_dir / "calls.txt", command))
-    if "params" in selected or wants_harness_agent:
+    if "params" in selected:
         steps.append(_capture_step("params", task_dir / "params.txt", ["params", function, *common]))
     if wants_harness_agent:
         harness_dir = task_dir / "harness"
@@ -284,19 +293,19 @@ def build_steps(config: dict[str, Any], task_dir: Path) -> list[PipelineStep]:
             repo,
             "--task-dir",
             str(task_dir),
-            "--report-json",
-            str(task_dir / "report.json"),
-            "--subsource",
-            str(task_dir / f"{function}_subsource_bundle.c"),
-            "--calls",
-            str(task_dir / "calls.txt"),
-            "--params",
-            str(task_dir / "params.txt"),
             "--out",
             str(harness_dir),
             "--artifact",
             str(task_dir / "generated_harness.txt"),
         ]
+        if "report_json" in selected:
+            command.extend(["--report-json", str(task_dir / "report.json")])
+        if "subsource" in selected:
+            command.extend(["--subsource", str(task_dir / f"{function}_subsource_bundle.c")])
+        if "calls" in selected:
+            command.extend(["--calls", str(task_dir / "calls.txt")])
+        if "params" in selected:
+            command.extend(["--params", str(task_dir / "params.txt")])
         _add_optional(command, "--file", config.get("file"))
         _add_optional(command, "--model", config.get("model"))
         _add_optional(command, "--chat-url", config.get("chat_url"))
@@ -325,7 +334,7 @@ def default_config() -> dict[str, Any]:
         "function": "can_send",
         "file": "net/can/af_can.c",
         "artifacts": ["report_md", "report_json", "subsource", "calls", "params", HARNESS_AGENT_ARTIFACT],
-        "model": "gpt-5.5",
+        "model": "glm-5.1",
         "chat_url": "",
         "api_key_env": "API_KEY",
         "model_timeout": DEFAULT_MODEL_TIMEOUT,

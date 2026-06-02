@@ -105,7 +105,7 @@ workspace/web/tasks/<task_id>/
     "function": "can_send",
     "file": "net/can/af_can.c",
     "artifacts": ["report_json", "subsource", "calls", "params", "harness_generation_agent"],
-    "model": "gpt-5.5",
+    "model": "glm-5.1",
     "api_key_env": "API_KEY"
   },
   "steps": []
@@ -183,17 +183,23 @@ calls
 params
 ```
 
-如果勾选 `Harness 生成 Agent`，调度层会自动补齐上下文步骤：
+如果勾选 `Harness 生成 Agent`，调度层不会自动补齐 kRepo 上下文。它只会把用户已经勾选的 kRepo 产物生成出来，并传给 Agent 作为 prompt 上下文：
 
 ```text
-report_json
-subsource
-calls
-params
+report_json   # 可选，勾选才生成并进入 prompt
+subsource     # 可选，勾选才生成并进入 prompt
+calls         # 可选，勾选才生成并进入 prompt
+params        # 可选，勾选才生成并进入 prompt
 harness_generation_agent
 ```
 
-这是因为 Harness 生成 Agent 依赖这四个输入文件：
+因此只勾选 `Harness 生成 Agent` 时，步骤只有：
+
+```text
+harness_generation_agent
+```
+
+Agent 仍会收到目标函数名、文件路径和源码根目录，但不会收到未勾选的 kRepo 知识产物。以下文件是推荐上下文，不是硬性必需输入：
 
 - `report.json`
 - `<function>_subsource_bundle.c`
@@ -399,7 +405,7 @@ python -m agents.harness_generation.agent \
 ```text
 API_KEY=...
 CHAT_COMPLETIONS_URL=...
-MODEL=gpt-5.5
+MODEL=glm-5.1
 ```
 
 也支持 shell 风格：
@@ -436,11 +442,14 @@ Clang 路径       -> --clang，留空时使用 CLANG 或 PATH 中的 clang
 
 ### 7.4 Prompt 输入
 
-Agent 发送给模型的上下文包含：
+Agent 发送给模型的上下文包含基础目标信息：
 
 - 目标函数名。
 - 文件路径。
 - 源码根目录。
+
+此外，只有用户勾选对应 kRepo 产物时，prompt 才会包含：
+
 - `report.json` 内容。
 - `subsource` 源码包。
 - 上层调用链。
@@ -669,16 +678,16 @@ workspace/web/tasks/<task_id>/generated_harness.txt
 ### 8.1 知识库上下文
 
 `report.json`
-: 结构化函数报告。包含目标函数位置、源码、参数、依赖、调用信息等。主要给 Agent 当机器可读上下文。
+: 结构化函数报告。包含目标函数位置、源码、参数、依赖、调用信息等。勾选后会作为机器可读上下文加入 Harness prompt。
 
 `<function>_subsource_bundle.c`
-: 目标函数和下游子函数源码包。Harness 生成 Agent 主要依赖它判断目标函数内部会调用什么、需要构造什么输入、需要 mock 什么内核依赖。
+: 目标函数和下游子函数源码包。勾选后会加入 Harness prompt，用于帮助 Agent 判断目标函数内部会调用什么、需要构造什么输入、需要 mock 什么内核依赖。
 
 `calls.txt`
-: 上层调用链。用于理解目标函数的真实调用场景，例如谁会调用它、调用路径大致是什么。
+: 上层调用链。勾选后会加入 Harness prompt，用于理解目标函数的真实调用场景，例如谁会调用它、调用路径大致是什么。
 
 `params.txt`
-: 参数约束。用于记录参数类型、空指针检查、长度字段、分支条件和从源码中推断出的输入限制。
+: 参数约束。勾选后会加入 Harness prompt，用于记录参数类型、空指针检查、长度字段、分支条件和从源码中推断出的输入限制。
 
 ### 8.2 Harness 生成结果
 
@@ -778,7 +787,7 @@ Agent 会拒绝写出逃逸输出目录的路径，例如：
 ```powershell
 $env:API_KEY='...'
 $env:CHAT_COMPLETIONS_URL='...'
-$env:MODEL='gpt-5.5'
+$env:MODEL='glm-5.1'
 ```
 
 Agent 会要求模型同时输出：
@@ -801,7 +810,7 @@ net\can\af_can.c
 - 不打印 API key。
 - 任务日志记录命令参数，但不记录 `Authorization` header。
 - `llm_transcript.md` 记录 prompt 和模型回复，但不记录 API key、Authorization header 或 Chat Completions URL。
-- 只有勾选 `Harness 生成 Agent` 时，知识库上下文才会发送给模型服务。
+- 只有同时勾选 `Harness 生成 Agent` 和具体 kRepo 产物时，该 kRepo 产物才会发送给模型服务。
 - Linux 源码和 kRepo 来源代码不被修改。
 - 生成物只写入 `workspace/`。
 
@@ -890,7 +899,7 @@ coverage/report.md
 当前测试重点：
 
 - `build_steps()` 是否正确构造知识抽取命令。
-- 勾选 Harness 生成 Agent 时是否自动补齐上下文步骤。
+- Harness 生成 Agent 是否只使用用户勾选的上下文步骤。
 - 模型返回 fenced JSON 时是否能解析。
 - Agent 成功后是否把 `harness.c` 等文件映射为前端产物。
 - 编译结果和 libFuzzer 试跑结果是否能转换成前端事件。

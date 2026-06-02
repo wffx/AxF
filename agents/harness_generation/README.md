@@ -1,11 +1,11 @@
 # Harness 生成 Agent
 
-该 Agent 负责把知识库产物转换为 `libFuzzer` fuzz 驱动。前端不会直接拼 prompt 或解析模型响应，只负责把任务目录中的上下文文件传给 Agent。
+该 Agent 负责把用户选择的知识库产物转换为 `libFuzzer` fuzz 驱动。前端不会直接拼 prompt 或解析模型响应，只负责把任务目录中的上下文文件传给 Agent。
 Agent 生成初稿后会立即尝试本地编译；如果编译失败，会把编译错误和当前核心文件片段反馈给 LLM，继续生成修复版，直到编译成功或达到最大修复轮数。修复轮允许 LLM 只返回需要修改的文件，Agent 会和上一轮产物合并，避免第二轮请求和响应都过大。编译成功后，Agent 会默认运行生成的 fuzzer 10 秒，确认二进制至少可以启动执行。
 
 模型调用默认使用 OpenAI-compatible Chat Completions 的流式响应。`.env.local` 中可以配置完整 `CHAT_COMPLETIONS_URL`，也可以使用 `API_BASE_URL`/`BASE_URL` 形式，Agent 会自动补 `/chat/completions`。
 
-输入：
+可选输入。只有前端勾选并生成的文件会加入 Harness prompt；未勾选时不会生成，也不会发送给模型：
 
 - `report.json`
 - `<function>_subsource_bundle.c`

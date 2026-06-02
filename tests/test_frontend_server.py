@@ -62,14 +62,14 @@ class FrontendServerTest(unittest.TestCase):
         self.assertEqual(defaults["model_timeout"], 300)
         self.assertEqual(defaults["model_max_retries"], 2)
 
-    def test_harness_step_adds_required_context_steps(self) -> None:
+    def test_harness_step_uses_only_selected_context_steps(self) -> None:
         steps = build_steps(
             {
                 "repo": "./linux-7.0",
                 "function": "can_send",
                 "file": "net/can/af_can.c",
-                "artifacts": ["harness_generation_agent"],
-                "model": "gpt-5.5",
+                "artifacts": ["report_json", "params", "harness_generation_agent"],
+                "model": "glm-5.1",
                 "chat_url": "https://example.invalid/v1/chat/completions",
                 "api_key_env": "API_KEY",
                 "model_max_retries": 2,
@@ -82,19 +82,42 @@ class FrontendServerTest(unittest.TestCase):
 
         self.assertEqual(
             [step.name for step in steps],
-            ["report_json", "subsource", "calls", "params", "harness_generation_agent"],
+            ["report_json", "params", "harness_generation_agent"],
         )
         harness_command = steps[-1].command
         command_text = " ".join(harness_command)
         self.assertIn("-m agents.harness_generation.agent", command_text)
-        self.assertIn("--model gpt-5.5", command_text)
+        self.assertIn("--model glm-5.1", command_text)
         self.assertIn("--api-key-env API_KEY", command_text)
         self.assertIn("--timeout 300", command_text)
         self.assertIn("--max-retries 2", command_text)
         self.assertIn("--clang /opt/llvm/bin/clang", command_text)
         self.assertIn("--max-repair-rounds 5", command_text)
         self.assertIn("--compile-timeout 30", command_text)
+        self.assertIn("--report-json /tmp/axf-task/report.json", command_text)
+        self.assertIn("--params /tmp/axf-task/params.txt", command_text)
+        self.assertNotIn("--subsource", command_text)
+        self.assertNotIn("--calls", command_text)
         self.assertEqual(steps[-1].artifact_path.name, "generated_harness.txt")
+
+    def test_harness_agent_does_not_generate_unchecked_context(self) -> None:
+        steps = build_steps(
+            {
+                "repo": "./linux-7.0",
+                "function": "can_send",
+                "file": "net/can/af_can.c",
+                "artifacts": ["harness_generation_agent"],
+            },
+            Path("/tmp/axf-task"),
+        )
+
+        command_text = " ".join(steps[0].command)
+
+        self.assertEqual([step.name for step in steps], ["harness_generation_agent"])
+        self.assertNotIn("--report-json", command_text)
+        self.assertNotIn("--subsource", command_text)
+        self.assertNotIn("--calls", command_text)
+        self.assertNotIn("--params", command_text)
 
     def test_parse_model_json_accepts_fenced_json(self) -> None:
         payload = parse_model_json(

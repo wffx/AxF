@@ -17,7 +17,7 @@ from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MODEL = "gpt-5.5"
+DEFAULT_MODEL = "glm-5.1"
 MAX_REPORT_CHARS = 50_000
 MAX_SOURCE_CHARS = 90_000
 MAX_TEXT_CHARS = 24_000
@@ -88,10 +88,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--function", required=True)
     parser.add_argument("--repo", required=True)
     parser.add_argument("--task-dir", required=True)
-    parser.add_argument("--report-json", required=True)
-    parser.add_argument("--subsource", required=True)
-    parser.add_argument("--calls", required=True)
-    parser.add_argument("--params", required=True)
+    parser.add_argument("--report-json", default="")
+    parser.add_argument("--subsource", default="")
+    parser.add_argument("--calls", default="")
+    parser.add_argument("--params", default="")
     parser.add_argument("--out", required=True)
     parser.add_argument("--artifact", required=True)
     parser.add_argument("--file", default="")
@@ -140,29 +140,31 @@ def generate_harness(args: argparse.Namespace) -> dict[str, str]:
 
 
 def build_context(args: argparse.Namespace) -> dict[str, str]:
-    report_path = Path(args.report_json)
-    subsource_path = Path(args.subsource)
-    calls_path = Path(args.calls)
-    params_path = Path(args.params)
-    missing = [str(path) for path in [report_path, subsource_path, calls_path, params_path] if not path.exists()]
-    if missing:
-        raise HarnessGenerationError("缺少知识库产物：" + ", ".join(missing))
-
     return {
         "function": args.function,
         "file": args.file,
         "repo": args.repo,
         "task_dir": args.task_dir,
-        "report_json": _read_limited(report_path, MAX_REPORT_CHARS),
-        "subsource": _read_limited(subsource_path, MAX_SOURCE_CHARS),
-        "calls": _read_limited(calls_path, MAX_TEXT_CHARS),
-        "params": _read_limited(params_path, MAX_TEXT_CHARS),
+        "report_json": read_optional_context(args.report_json, MAX_REPORT_CHARS),
+        "subsource": read_optional_context(args.subsource, MAX_SOURCE_CHARS),
+        "calls": read_optional_context(args.calls, MAX_TEXT_CHARS),
+        "params": read_optional_context(args.params, MAX_TEXT_CHARS),
     }
+
+
+def read_optional_context(value: str, limit: int) -> str:
+    if not value:
+        return ""
+    path = Path(value)
+    if not path.exists():
+        raise HarnessGenerationError(f"指定的知识库产物不存在：{path}")
+    return _read_limited(path, limit)
 
 
 def build_prompt(context: dict[str, str]) -> str:
     target = f"{context['file']}::{context['function']}" if context["file"] else context["function"]
-    return f"""你是 AxF 的 Harness 生成 Agent。请基于下方 kRepo/AxF 知识库产物，为目标函数生成用户态 libFuzzer 驱动。
+    context_sections = build_prompt_context_sections(context)
+    return f"""你是 AxF 的 Harness 生成 Agent。请基于目标函数信息和用户选择加入 prompt 的 kRepo/AxF 知识产物，生成用户态 libFuzzer 驱动。
 
 目标函数：{target}
 源码根目录：{context['repo']}
@@ -173,7 +175,7 @@ def build_prompt(context: dict[str, str]) -> str:
 3. 如果目标严重依赖真实内核状态、硬件、并发或函数指针分派，请给出 unsupported 或 needs_manual_fixture，不要伪造成功。
 4. 只能生成文件内容，不要修改 Linux 源码。
 5. 生成代码会被本地 clang 立即编译验证；请尽量让 harness.c 和 mocks.c 可以仅依赖生成文件完成用户态编译。
-6. 生成目录内必须包含目标函数 {context['function']} 的可链接定义。不能只写函数声明；需要基于 subsource bundle 写用户态适配实现，或在无法适配时标记 unsupported/needs_manual_fixture。
+6. 生成目录内必须包含目标函数 {context['function']} 的可链接定义。不能只写函数声明；如果 prompt 中提供了 subsource bundle，优先基于它写用户态适配实现；如果缺少足够源码上下文，请标记 unsupported/needs_manual_fixture。
 7. 不要通过空实现目标函数、跳过目标调用、只调用 mock 函数来伪造编译成功。
 8. dict.txt 只能包含短小 ASCII libFuzzer 字典项，最多 20 行；不要输出长二进制 blob，不要重复输出大量 \\x00。seed_hints 也必须短小。
 9. 同时给出 Unix build.sh 和 Windows build.ps1。编译命令以 clang 和 libFuzzer sanitizer 为默认假设即可。
@@ -200,18 +202,23 @@ def build_prompt(context: dict[str, str]) -> str:
   }}
 }}
 
---- report.json ---
-{context['report_json']}
-
---- subsource bundle ---
-{context['subsource']}
-
---- upstream calls ---
-{context['calls']}
-
---- parameter constraints ---
-{context['params']}
+{context_sections}
 """
+
+
+def build_prompt_context_sections(context: dict[str, str]) -> str:
+    sections = []
+    if context.get("report_json"):
+        sections.extend(["--- report.json ---", context["report_json"], ""])
+    if context.get("subsource"):
+        sections.extend(["--- subsource bundle ---", context["subsource"], ""])
+    if context.get("calls"):
+        sections.extend(["--- upstream calls ---", context["calls"], ""])
+    if context.get("params"):
+        sections.extend(["--- parameter constraints ---", context["params"], ""])
+    if not sections:
+        return "未选择额外 kRepo 知识产物。请仅基于目标函数标识和通用 libFuzzer/C 经验生成；信息不足时标记 unsupported 或 needs_manual_fixture。"
+    return "\n".join(sections).rstrip()
 
 
 def request_harness_json(
@@ -315,6 +322,9 @@ def request_harness_json(
     )
     log_llm_interaction("response", interaction, transcript_path)
     if not content:
+        html_error = html_response_error(raw, chat_url)
+        if html_error:
+            raise HarnessGenerationError(html_error)
         raise HarnessGenerationError(
             "模型响应中没有 choices[0].message.content；响应预览："
             + response_preview(raw)
@@ -430,7 +440,12 @@ def normalize_chat_url(value: str) -> str:
         return ""
     if url.rstrip("/").endswith("/chat/completions"):
         return url
-    return url.rstrip("/") + "/chat/completions"
+    base = url.rstrip("/")
+    if base.endswith("/api"):
+        return base + "/v1/chat/completions"
+    if base.endswith("/v1") or base.endswith("/api/v1"):
+        return base + "/chat/completions"
+    return base + "/v1/chat/completions"
 
 
 def read_chat_response(response: Any, *, streaming: bool) -> str:
@@ -1202,6 +1217,19 @@ def response_preview(raw: str, limit: int = 800) -> str:
     if len(preview) > limit:
         return preview[:limit] + "...<truncated>"
     return preview
+
+
+def html_response_error(raw: str, chat_url: str) -> str:
+    text = raw.lstrip().lower()
+    if not (text.startswith("<!doctype html") or text.startswith("<html") or "<title>new api</title>" in text):
+        return ""
+    return (
+        "模型接口返回的是 HTML 网页，不是 Chat Completions JSON。"
+        f"请检查 CHAT_COMPLETIONS_URL 或前端 Chat Completions URL，当前请求地址：{chat_url}。"
+        "它必须是 API endpoint，例如 https://.../v1/chat/completions 或 https://.../api/v1/chat/completions，"
+        "不能填 New API 管理页面首页。响应预览："
+        + response_preview(raw)
+    )
 
 
 def _legacy_files(payload: dict[str, Any]) -> list[dict[str, str]]:

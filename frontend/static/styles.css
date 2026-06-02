@@ -174,6 +174,7 @@ input:focus {
   display: flex;
   align-items: center;
   gap: 9px;
+  flex-wrap: wrap;
 }
 
 .check input {
@@ -181,6 +182,18 @@ input:focus {
   min-height: 0;
   height: 16px;
   accent-color: var(--accent);
+}
+
+.check.harness-context {
+  color: var(--accent-dark);
+}
+
+.check-note {
+  margin-left: 25px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  flex-basis: 100%;
 }
 
 .grid {

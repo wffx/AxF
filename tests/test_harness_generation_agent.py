@@ -12,10 +12,13 @@ from agents.harness_generation.agent import (
     HarnessGenerationError,
     RunResult,
     append_llm_transcript,
+    build_context,
+    build_prompt,
     build_repair_prompt,
     compile_and_repair,
     compile_harness,
     compile_skip_reason,
+    html_response_error,
     merge_repair_payload,
     normalize_chat_url,
     parse_model_json,
@@ -52,7 +55,7 @@ class HarnessGenerationAgentTest(unittest.TestCase):
             append_llm_transcript(
                 path,
                 interaction="initial generation",
-                model="gpt-5.5",
+                model="glm-5.1",
                 messages=[
                     {"role": "system", "content": "system says"},
                     {"role": "user", "content": "user says"},
@@ -72,7 +75,7 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {"API_KEY": "secret"}):
             transcript = Path(tmp) / "llm_transcript.md"
             args = argparse.Namespace(
-                model="gpt-5.5",
+                model="glm-5.1",
                 chat_url="https://example.invalid/v1/chat/completions",
                 api_key_env="API_KEY",
                 timeout=300,
@@ -118,7 +121,7 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {"API_KEY": "secret"}):
             transcript = Path(tmp) / "llm_transcript.md"
             args = argparse.Namespace(
-                model="gpt-5.5",
+                model="glm-5.1",
                 chat_url="https://example.invalid/v1",
                 api_key_env="API_KEY",
                 timeout=300,
@@ -153,7 +156,7 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {"API_KEY": "secret"}):
             transcript = Path(tmp) / "llm_transcript.md"
             args = argparse.Namespace(
-                model="gpt-5.5",
+                model="glm-5.1",
                 chat_url="https://example.invalid/v1",
                 api_key_env="API_KEY",
                 timeout=300,
@@ -184,7 +187,7 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {"API_KEY": "secret"}):
             transcript = Path(tmp) / "llm_transcript.md"
             args = argparse.Namespace(
-                model="gpt-5.5",
+                model="glm-5.1",
                 chat_url="https://example.invalid/v1",
                 api_key_env="API_KEY",
                 timeout=300,
@@ -238,6 +241,14 @@ class HarnessGenerationAgentTest(unittest.TestCase):
 
     def test_normalize_chat_url_accepts_base_or_full_endpoint(self) -> None:
         self.assertEqual(
+            normalize_chat_url("https://example.invalid"),
+            "https://example.invalid/v1/chat/completions",
+        )
+        self.assertEqual(
+            normalize_chat_url("https://example.invalid/api"),
+            "https://example.invalid/api/v1/chat/completions",
+        )
+        self.assertEqual(
             normalize_chat_url("https://example.invalid/api/v1"),
             "https://example.invalid/api/v1/chat/completions",
         )
@@ -245,6 +256,58 @@ class HarnessGenerationAgentTest(unittest.TestCase):
             normalize_chat_url("https://example.invalid/api/v1/chat/completions"),
             "https://example.invalid/api/v1/chat/completions",
         )
+
+    def test_html_response_error_points_to_bad_endpoint(self) -> None:
+        message = html_response_error(
+            '<!doctype html><html lang="zh"><head><title>New API</title></head></html>',
+            "https://example.invalid",
+        )
+
+        self.assertIn("HTML 网页", message)
+        self.assertIn("不是 Chat Completions JSON", message)
+        self.assertIn("https://example.invalid", message)
+
+    def test_build_context_accepts_no_krepo_prompt_context(self) -> None:
+        args = argparse.Namespace(
+            function="can_send",
+            file="net/can/af_can.c",
+            repo="./linux-7.0",
+            task_dir="/tmp/axf-task",
+            report_json="",
+            subsource="",
+            calls="",
+            params="",
+        )
+
+        context = build_context(args)
+        prompt = build_prompt(context)
+
+        self.assertEqual(context["report_json"], "")
+        self.assertNotIn("--- report.json ---", prompt)
+        self.assertNotIn("--- subsource bundle ---", prompt)
+        self.assertIn("未选择额外 kRepo 知识产物", prompt)
+
+    def test_build_context_uses_only_explicit_krepo_prompt_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.json"
+            report.write_text('{"name":"can_send"}\n', encoding="utf-8")
+            args = argparse.Namespace(
+                function="can_send",
+                file="net/can/af_can.c",
+                repo="./linux-7.0",
+                task_dir="/tmp/axf-task",
+                report_json=str(report),
+                subsource="",
+                calls="",
+                params="",
+            )
+
+            prompt = build_prompt(build_context(args))
+
+        self.assertIn("--- report.json ---", prompt)
+        self.assertIn('{"name":"can_send"}', prompt)
+        self.assertNotIn("--- upstream calls ---", prompt)
+        self.assertNotIn("--- parameter constraints ---", prompt)
 
     def test_compile_harness_records_success_with_configured_clang(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
