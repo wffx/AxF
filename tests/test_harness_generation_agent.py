@@ -117,6 +117,24 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertEqual(payload["classification"], "skb_handler")
         self.assertEqual(payload["files"][0]["content"], "\\x00\n\\x01")
 
+    def test_parse_model_json_quotes_bare_object_keys(self) -> None:
+        content = """
+{
+  classification: "skb_handler",
+  files: [
+    {path: "harness.c", content: "const char *s = \\"classification: keep\\";"}
+  ],
+  harness_spec: {status: "generated", function: {name: "can_send"}}
+}
+"""
+
+        payload = parse_model_json(content)
+
+        self.assertEqual(payload["classification"], "skb_handler")
+        self.assertEqual(payload["files"][0]["path"], "harness.c")
+        self.assertIn("classification: keep", payload["files"][0]["content"])
+        self.assertEqual(payload["harness_spec"]["function"]["name"], "can_send")
+
     def test_request_harness_json_accepts_streaming_chat_response(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {"API_KEY": "secret"}):
             transcript = Path(tmp) / "llm_transcript.md"

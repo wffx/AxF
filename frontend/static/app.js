@@ -587,15 +587,20 @@ function escapeHtml(value) {
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   eventsView.textContent = "正在创建任务...";
-  const task = await api("/api/tasks", {
-    method: "POST",
-    body: JSON.stringify(readConfig()),
-  });
-  activeTaskId = task.id;
-  renderTask(task);
-  switchTab("events");
-  await refreshTasks();
-  startPolling();
+  try {
+    const task = await api("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify(readConfig()),
+    });
+    activeTaskId = task.id;
+    renderTask(task);
+    switchTab("events");
+    await refreshTasks();
+    startPolling();
+  } catch (error) {
+    eventsView.textContent = `创建任务失败: ${error.message}`;
+    switchTab("events");
+  }
 });
 
 cancelButton.addEventListener("click", async () => {

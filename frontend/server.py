@@ -92,6 +92,14 @@ class TaskStore:
         task_id = uuid.uuid4().hex[:12]
         task_dir = self.workspace / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            build_steps(config, task_dir)
+        except ValueError:
+            try:
+                task_dir.rmdir()
+            except OSError:
+                pass
+            raise
         task = Task(id=task_id, config=config, task_dir=task_dir)
         with self._lock:
             self._tasks[task_id] = task
@@ -594,7 +602,7 @@ def _knowledge_artifact_filenames(artifact_name: str, function: str) -> list[str
 
 def _selected_artifacts(config: dict[str, Any]) -> set[str]:
     if "artifacts" not in config:
-        return set(default_config()["artifacts"])
+        return set()
     raw = config.get("artifacts")
     if raw is None:
         return set()

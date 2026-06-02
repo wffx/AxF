@@ -552,12 +552,12 @@ def parse_model_json(content: str) -> dict[str, Any]:
 
 
 def load_model_json_text(text: str) -> Any:
-    candidates = [text, escape_json_string_controls(text)]
+    candidates = model_json_candidates(text)
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end > start:
         sliced = text[start : end + 1]
-        candidates.extend([sliced, escape_json_string_controls(sliced)])
+        candidates.extend(model_json_candidates(sliced))
 
     last_error: json.JSONDecodeError | None = None
     seen: set[str] = set()
@@ -572,6 +572,71 @@ def load_model_json_text(text: str) -> Any:
     if last_error is not None:
         raise last_error
     raise json.JSONDecodeError("empty JSON candidate", text, 0)
+
+
+def model_json_candidates(text: str) -> list[str]:
+    quoted_keys = quote_bare_json_object_keys(text)
+    return [
+        text,
+        escape_json_string_controls(text),
+        quoted_keys,
+        escape_json_string_controls(quoted_keys),
+    ]
+
+
+def quote_bare_json_object_keys(text: str) -> str:
+    result: list[str] = []
+    index = 0
+    length = len(text)
+    in_string = False
+    escaped = False
+
+    while index < length:
+        char = text[index]
+        if in_string:
+            result.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+
+        if char == '"':
+            in_string = True
+            result.append(char)
+            index += 1
+            continue
+
+        if char not in "{,":
+            result.append(char)
+            index += 1
+            continue
+
+        result.append(char)
+        index += 1
+        whitespace_start = index
+        while index < length and text[index].isspace():
+            result.append(text[index])
+            index += 1
+        key_start = index
+        if index < length and (text[index].isalpha() or text[index] == "_"):
+            index += 1
+            while index < length and (text[index].isalnum() or text[index] == "_"):
+                index += 1
+            key = text[key_start:index]
+            after_key = index
+            while after_key < length and text[after_key].isspace():
+                after_key += 1
+            if after_key < length and text[after_key] == ":":
+                result.append(f'"{key}"')
+                continue
+        result.append(text[key_start:index])
+        continue
+
+    return "".join(result)
 
 
 def escape_json_string_controls(text: str) -> str:

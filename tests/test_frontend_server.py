@@ -7,6 +7,7 @@ from pathlib import Path
 from agents.harness_generation.agent import parse_model_json
 from frontend.server import (
     PipelineStep,
+    TaskStore,
     build_steps,
     default_config,
     _completion_message,
@@ -66,7 +67,18 @@ class FrontendServerTest(unittest.TestCase):
     def test_empty_artifact_selection_does_not_fall_back_to_defaults(self) -> None:
         self.assertEqual(_selected_artifacts({"artifacts": []}), set())
         self.assertEqual(_selected_artifacts({"artifacts": ""}), set())
-        self.assertIn("report_json", _selected_artifacts({}))
+        self.assertEqual(_selected_artifacts({}), set())
+
+    def test_task_store_rejects_empty_artifact_selection_before_starting_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TaskStore(Path(tmp))
+
+            with self.assertRaisesRegex(ValueError, "kRepo 产物或 AxF 后续流程"):
+                store.create({"repo": "./linux-7.0", "function": "can_send", "artifacts": []})
+
+            task_dirs = list(Path(tmp).iterdir())
+
+        self.assertEqual(task_dirs, [])
 
     def test_harness_step_uses_only_selected_context_steps(self) -> None:
         steps = build_steps(
