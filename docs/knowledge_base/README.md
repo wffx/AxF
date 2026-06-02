@@ -53,6 +53,8 @@ VS Code C/C++ 插件 `vscode-cpptools` 生成的 SQLite 元数据库
 - 推断有效输入格式、边界条件和错误路径。
 - 为 libFuzzer harness 生成提供种子约束和调用前置条件。
 
+在 AxF 主流程中，这些输出会写入 `workspace/web/tasks/<task_id>/` 或 `workspace/terminal/tasks/<task_id>/`。后续任务可以通过 Web 表单的“复用知识库目录”或 Terminal CLI 的 `--knowledge-dir` 指向旧任务目录，复用已生成的 `report.json`、源码包、调用链和参数约束。复用行为由调度层完成，知识库组件本身仍只负责按命令生成产物。
+
 ## 元数据库来源
 
 脚本依赖的 `BROWSE.VC.DB` 由 VS Code C/C++ 插件生成：
@@ -340,5 +342,4 @@ python .\knowledge_base\src\cpp_meta_query.py calls can_send --repo .\linux-7.0 
 更多命令、参数和接口说明见
 [cpp_meta_query API 文档](../api/knowledge_base/cpp_meta_query.md)；实现细节、符号歧义和去重策略见
 [cpp_meta_query API 实现细节](../api/knowledge_base/api_implementation_details.md)。
-
 

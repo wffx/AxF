@@ -109,6 +109,7 @@ function setField(name, value) {
 function applyDefaults(defaults) {
   setField("repo", defaults.repo);
   setField("db", defaults.db);
+  setField("knowledge_dir", defaults.knowledge_dir);
   setField("function", defaults.function);
   setField("file", defaults.file);
   setField("model", defaults.model);

@@ -9,5 +9,6 @@
 
 当前已有 API 文档：
 
+- [Terminal CLI](frontend/terminal.md)
 - [cpp_meta_query API](knowledge_base/cpp_meta_query.md)
 - [cpp_meta_query API 实现细节](knowledge_base/api_implementation_details.md)

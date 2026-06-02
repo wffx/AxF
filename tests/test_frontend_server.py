@@ -15,6 +15,7 @@ from frontend.server import (
     _harness_failure_message_for_step,
     _harness_events_for_step,
     _harness_summary,
+    _selected_artifacts,
 )
 
 
@@ -61,6 +62,11 @@ class FrontendServerTest(unittest.TestCase):
         self.assertEqual(defaults["api_key_env"], "API_KEY")
         self.assertEqual(defaults["model_timeout"], 300)
         self.assertEqual(defaults["model_max_retries"], 2)
+
+    def test_empty_artifact_selection_does_not_fall_back_to_defaults(self) -> None:
+        self.assertEqual(_selected_artifacts({"artifacts": []}), set())
+        self.assertEqual(_selected_artifacts({"artifacts": ""}), set())
+        self.assertIn("report_json", _selected_artifacts({}))
 
     def test_harness_step_uses_only_selected_context_steps(self) -> None:
         steps = build_steps(
@@ -118,6 +124,34 @@ class FrontendServerTest(unittest.TestCase):
         self.assertNotIn("--subsource", command_text)
         self.assertNotIn("--calls", command_text)
         self.assertNotIn("--params", command_text)
+
+    def test_selected_knowledge_artifacts_can_be_reused_from_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            knowledge_dir = base / "knowledge"
+            task_dir = base / "task"
+            knowledge_dir.mkdir()
+            (knowledge_dir / "report.json").write_text("{}", encoding="utf-8")
+            (knowledge_dir / "params.txt").write_text("params", encoding="utf-8")
+
+            steps = build_steps(
+                {
+                    "repo": "./linux-7.0",
+                    "function": "can_send",
+                    "file": "net/can/af_can.c",
+                    "knowledge_dir": str(knowledge_dir),
+                    "artifacts": ["report_json", "params", "harness_generation_agent"],
+                },
+                task_dir,
+            )
+
+        self.assertEqual([step.name for step in steps], ["report_json", "params", "harness_generation_agent"])
+        self.assertEqual(steps[0].reuse_from, knowledge_dir / "report.json")
+        self.assertEqual(steps[1].reuse_from, knowledge_dir / "params.txt")
+        self.assertEqual(steps[0].command[0], "reuse")
+        command_text = " ".join(steps[-1].command)
+        self.assertIn(f"--report-json {task_dir / 'report.json'}", command_text)
+        self.assertIn(f"--params {task_dir / 'params.txt'}", command_text)
 
     def test_parse_model_json_accepts_fenced_json(self) -> None:
         payload = parse_model_json(

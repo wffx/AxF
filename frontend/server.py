@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import threading
@@ -30,6 +31,7 @@ class PipelineStep:
     artifact_name: str
     artifact_path: Path
     capture_stdout: bool = True
+    reuse_from: Path | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -38,6 +40,7 @@ class PipelineStep:
             "artifact_name": self.artifact_name,
             "artifact_path": str(self.artifact_path),
             "capture_stdout": self.capture_stdout,
+            "reuse_from": str(self.reuse_from) if self.reuse_from else "",
         }
 
 
@@ -177,7 +180,7 @@ class TaskStore:
             self._event(
                 task_id,
                 step.name,
-                f"[{index}/{len(steps)}] {_step_action_label(step.artifact_name)}：{_artifact_label(step.artifact_name)}",
+                f"[{index}/{len(steps)}] {_step_action_label(step)}：{_artifact_label(step.artifact_name)}",
                 artifact=step.artifact_name,
             )
             self._log(task_id, "$ " + " ".join(step.command))
@@ -209,6 +212,15 @@ class TaskStore:
         self._event(task_id, "complete", _completion_message(task.task_dir))
 
     def _run_step(self, task_id: str, step: PipelineStep) -> int:
+        if step.reuse_from:
+            try:
+                step.artifact_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(step.reuse_from, step.artifact_path)
+            except OSError as exc:
+                self._log(task_id, f"复用失败：{exc}")
+                return 1
+            return 0
+
         try:
             process = subprocess.Popen(
                 step.command,
@@ -254,33 +266,45 @@ def build_steps(config: dict[str, Any], task_dir: Path) -> list[PipelineStep]:
 
     steps: list[PipelineStep] = []
     if "report_md" in selected:
-        steps.append(
-            _capture_step("report_md", task_dir / "report.md", ["report", function, *common])
-        )
+        output = _artifact_output_path("report_md", function, task_dir)
+        steps.append(_reuse_or_capture_step(config, "report_md", function, output, ["report", function, *common]))
     if "report_json" in selected:
+        output = _artifact_output_path("report_json", function, task_dir)
         steps.append(
-            _capture_step(
+            _reuse_or_capture_step(
+                config,
                 "report_json",
-                task_dir / "report.json",
+                function,
+                output,
                 ["report", function, *common, "--format", "json"],
             )
         )
     if "source" in selected:
-        output = task_dir / f"{function}_source_bundle.c"
-        command = _base_command("source", function, *common, "--output", str(output))
-        steps.append(PipelineStep("source", command, "source", output, capture_stdout=False))
+        output = _artifact_output_path("source", function, task_dir)
+        reuse_from = _knowledge_reuse_path(config, "source", function)
+        if reuse_from:
+            steps.append(_reuse_step("source", output, reuse_from))
+        else:
+            command = _base_command("source", function, *common, "--output", str(output))
+            steps.append(PipelineStep("source", command, "source", output, capture_stdout=False))
     if "subsource" in selected:
-        output = task_dir / f"{function}_subsource_bundle.c"
-        command = _base_command("subsource", function, *common, "--output", str(output))
-        _add_optional(command, "--max-depth", config.get("max_depth"))
-        _add_optional(command, "--max-functions", config.get("max_functions"))
-        steps.append(PipelineStep("subsource", command, "subsource", output, capture_stdout=False))
+        output = _artifact_output_path("subsource", function, task_dir)
+        reuse_from = _knowledge_reuse_path(config, "subsource", function)
+        if reuse_from:
+            steps.append(_reuse_step("subsource", output, reuse_from))
+        else:
+            command = _base_command("subsource", function, *common, "--output", str(output))
+            _add_optional(command, "--max-depth", config.get("max_depth"))
+            _add_optional(command, "--max-functions", config.get("max_functions"))
+            steps.append(PipelineStep("subsource", command, "subsource", output, capture_stdout=False))
     if "calls" in selected:
         command = ["calls", function, *common]
         _add_optional(command, "--max-depth", config.get("call_depth"))
-        steps.append(_capture_step("calls", task_dir / "calls.txt", command))
+        output = _artifact_output_path("calls", function, task_dir)
+        steps.append(_reuse_or_capture_step(config, "calls", function, output, command))
     if "params" in selected:
-        steps.append(_capture_step("params", task_dir / "params.txt", ["params", function, *common]))
+        output = _artifact_output_path("params", function, task_dir)
+        steps.append(_reuse_or_capture_step(config, "params", function, output, ["params", function, *common]))
     if wants_harness_agent:
         harness_dir = task_dir / "harness"
         command = [
@@ -299,13 +323,13 @@ def build_steps(config: dict[str, Any], task_dir: Path) -> list[PipelineStep]:
             str(task_dir / "generated_harness.txt"),
         ]
         if "report_json" in selected:
-            command.extend(["--report-json", str(task_dir / "report.json")])
+            command.extend(["--report-json", str(_artifact_output_path("report_json", function, task_dir))])
         if "subsource" in selected:
-            command.extend(["--subsource", str(task_dir / f"{function}_subsource_bundle.c")])
+            command.extend(["--subsource", str(_artifact_output_path("subsource", function, task_dir))])
         if "calls" in selected:
-            command.extend(["--calls", str(task_dir / "calls.txt")])
+            command.extend(["--calls", str(_artifact_output_path("calls", function, task_dir))])
         if "params" in selected:
-            command.extend(["--params", str(task_dir / "params.txt")])
+            command.extend(["--params", str(_artifact_output_path("params", function, task_dir))])
         _add_optional(command, "--file", config.get("file"))
         _add_optional(command, "--model", config.get("model"))
         _add_optional(command, "--chat-url", config.get("chat_url"))
@@ -331,6 +355,7 @@ def default_config() -> dict[str, Any]:
     return {
         "repo": _default_repo_path(),
         "db": "",
+        "knowledge_dir": "",
         "function": "can_send",
         "file": "net/can/af_can.c",
         "artifacts": ["report_md", "report_json", "subsource", "calls", "params", HARNESS_AGENT_ARTIFACT],
@@ -503,13 +528,81 @@ def _capture_step(name: str, output: Path, command: list[str]) -> PipelineStep:
     return PipelineStep(name, _base_command(*command), name, output, capture_stdout=True)
 
 
+def _reuse_or_capture_step(
+    config: dict[str, Any],
+    name: str,
+    function: str,
+    output: Path,
+    command: list[str],
+) -> PipelineStep:
+    reuse_from = _knowledge_reuse_path(config, name, function)
+    if reuse_from:
+        return _reuse_step(name, output, reuse_from)
+    return _capture_step(name, output, command)
+
+
+def _reuse_step(name: str, output: Path, source: Path) -> PipelineStep:
+    return PipelineStep(
+        name,
+        ["reuse", str(source), str(output)],
+        name,
+        output,
+        capture_stdout=False,
+        reuse_from=source,
+    )
+
+
+def _knowledge_reuse_path(config: dict[str, Any], artifact_name: str, function: str) -> Path | None:
+    raw_dir = str(config.get("knowledge_dir") or "").strip()
+    if not raw_dir:
+        return None
+    base = _resolve_user_path(raw_dir)
+    if base.is_file():
+        return base if artifact_name in _KREPO_ARTIFACT_NAMES else None
+    for name in _knowledge_artifact_filenames(artifact_name, function):
+        candidate = base / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _resolve_user_path(value: str) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return (PROJECT_ROOT / path).resolve()
+
+
+_KREPO_ARTIFACT_NAMES = {"report_md", "report_json", "source", "subsource", "calls", "params"}
+
+
+def _artifact_output_path(artifact_name: str, function: str, task_dir: Path) -> Path:
+    filename = _knowledge_artifact_filenames(artifact_name, function)[0]
+    return task_dir / filename
+
+
+def _knowledge_artifact_filenames(artifact_name: str, function: str) -> list[str]:
+    return {
+        "report_md": ["report.md"],
+        "report_json": ["report.json"],
+        "source": [f"{function}_source_bundle.c", "source_bundle.c"],
+        "subsource": [f"{function}_subsource_bundle.c", "subsource_bundle.c"],
+        "calls": ["calls.txt"],
+        "params": ["params.txt"],
+    }.get(artifact_name, [artifact_name])
+
+
 def _selected_artifacts(config: dict[str, Any]) -> set[str]:
+    if "artifacts" not in config:
+        return set(default_config()["artifacts"])
     raw = config.get("artifacts")
+    if raw is None:
+        return set()
     if isinstance(raw, list):
-        return {str(item) for item in raw}
+        return {str(item).strip() for item in raw if str(item).strip()}
     if isinstance(raw, str):
         return {item.strip() for item in raw.split(",") if item.strip()}
-    return set(default_config()["artifacts"])
+    return set()
 
 
 def _has_harness_agent(selected: set[str]) -> bool:
@@ -545,8 +638,10 @@ def _artifact_label(name: str) -> str:
     }.get(name, name)
 
 
-def _step_action_label(name: str) -> str:
-    return "正在运行" if name == HARNESS_AGENT_ARTIFACT else "正在抽取"
+def _step_action_label(step: PipelineStep) -> str:
+    if step.reuse_from:
+        return "正在复用"
+    return "正在运行" if step.artifact_name == HARNESS_AGENT_ARTIFACT else "正在抽取"
 
 
 def _extra_artifacts_for_step(step: PipelineStep) -> list[tuple[str, Path]]:
