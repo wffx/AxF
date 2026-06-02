@@ -143,6 +143,10 @@ parse_config_source_bundle.c
 以及这些源码共同涉及的结构体、typedef、枚举/枚举值、常量/宏、全局变量、
 静态变量等代码片段，并合并为一个 `.c` 文件。
 
+`subsource` 生成文件会保留真实目标函数和子函数源码，并在前置区域按需合成最小
+typedef、宏、结构体字段和外部调用桩，使这些源码片段能共同组成可编译的最小 C 单元。
+原始数据库依赖片段默认只保留紧凑的符号、文件和行号摘要，不再把大段源码逐行注释到输出文件中。
+
 ```powershell
 python .\knowledge_base\src\cpp_meta_query.py subsource parse_config --repo .\my_project --file src\config.c --max-depth 1 --output .\parse_config_subfunctions_bundle.c
 ```
@@ -406,7 +410,7 @@ python .\knowledge_base\src\cpp_meta_query.py calls parse_config --db .\my_proje
 : 导出 `.c` 分析包。常用参数是 `--output/-o`、`--max-nesting-depth`、`--max-deps`、`--max-snippet-lines`。
 
 `subsource`
-: 导出目标函数和下游子函数 `.c` 分析包。常用参数是 `--output/-o`、`--max-depth`、`--max-functions`、`--max-nesting-depth`、`--max-deps`、`--include-auxiliary-calls`。
+: 导出目标函数和下游子函数可编译 `.c` 分析包。常用参数是 `--output/-o`、`--max-depth`、`--max-functions`、`--max-nesting-depth`、`--max-deps`、`--include-auxiliary-calls`。
 
 `calls`
 : 打印上层调用链。常用参数是 `--max-depth`、`--max-chains`、`--max-callers-per-level`。
@@ -493,6 +497,9 @@ Wrote subfunction source bundle: test\fixtures\vfs_read_subfunctions_bundle_test
 Root function:
   vfs_read
 
+Compile support:
+  minimal typedefs/macros/struct fields/stubs
+
 Function bodies:
   rw_verify_area
   new_sync_read
@@ -500,7 +507,8 @@ Function bodies:
   vfs_read
 
 Ordering:
-  子函数源码位于 vfs_read 之前，依赖片段位于所有函数源码之前。
+  子函数源码位于 vfs_read 之前，按需合成的最小编译依赖位于所有函数源码之前。
+  原始依赖以紧凑的符号引用摘要保留在分析区，不再内联大段注释源码。
 
 Skipped auxiliary callees:
   add_rchar

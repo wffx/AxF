@@ -11,7 +11,7 @@ VS Code C/C++ 插件 `vscode-cpptools` 生成的 SQLite 元数据库
 
 ## 归档来源与裁剪
 
-当前 `knowledge_base/src/` 下的实现来自 `https://github.com/wffx/kRepo`，最近一次同步对应提交为 `f3783c1`。
+当前 `knowledge_base/src/` 下的实现来自 `https://github.com/wffx/kRepo`，最近一次同步对应提交为 `cca013f`。
 
 归档后已按主工程目录约定做了整理：
 
@@ -203,6 +203,9 @@ python .\knowledge_base\src\cpp_meta_query.py calls parse_config --db .\my_proje
 
 `subsource` 从目标函数出发，递归解析可直接定位的下游子函数，并将目标函数、
 子函数源码和这些函数共同涉及的依赖片段合并成一个 `.c` 分析包。
+生成文件会保留真实目标函数和子函数源码，并在前置区域按需合成最小 typedef、宏、
+结构体字段和外部调用桩，使这些源码片段能共同组成可编译的最小 C 单元。
+原始数据库依赖片段默认只保留紧凑的符号、文件和行号摘要，不再把大段源码逐行注释到输出文件中。
 
 输出仍按依赖优先组织：
 
@@ -217,7 +220,8 @@ python .\knowledge_base\src\cpp_meta_query.py calls parse_config --db .\my_proje
 例如 `add_rchar`、`inc_syscr` 这类统计调用；生成文件会在
 `Skipped auxiliary callees` 段落中记录跳过项。
 同时会排除 `test`、`tests`、`testing`、`selftests`、`DT`、`ST` 等测试目录下的符号索引，
-并对最终输出中的重复依赖和重复函数定义做去重。
+并对最终输出中的重复依赖和重复函数定义做去重。按需合成依赖用于语法检查，
+原始依赖摘要用于知识库上下文和人工回溯。
 
 ### 3. calls
 

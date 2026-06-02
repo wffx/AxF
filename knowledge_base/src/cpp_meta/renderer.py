@@ -65,20 +65,17 @@ def render_subfunction_c_bundle(report: dict[str, object]) -> str:
         f"exclude_test_symbols={limits.get('exclude_test_symbols', False)}"
     )
     lines.append(" *")
-    lines.append(" * This file is a source-analysis bundle for knowledge-base construction.")
-    lines.append(" * It is intended for review and harness generation, not direct compilation.")
-    lines.append(" * Dependency snippets are grouped before function bodies.")
+    lines.append(" * This file is a compilable source-analysis bundle for knowledge-base construction.")
+    lines.append(" * Target and child function bodies are emitted as real C code.")
+    lines.append(" * Minimal compatibility declarations are synthesized before the functions.")
+    lines.append(" * Original dependency snippets are summarized as symbol references.")
     lines.append(" * Function bodies are ordered with callees before callers when resolvable.")
     lines.append(" * Duplicate definitions are emitted once by symbol kind and name.")
     lines.append(" */")
     lines.append("")
+    append_subsource_compile_prelude(lines, report)
     seen_definitions: set[tuple[str, str]] = set()
-    append_bundle_group(lines, "Constants and macros", deps["constants"], seen_definitions)
-    append_bundle_group(lines, "Typedefs", deps["typedefs"], seen_definitions)
-    append_bundle_group(lines, "Enums and enumerators", deps["enums"], seen_definitions)
-    append_bundle_group(lines, "Global variables", deps["global_variables"], seen_definitions)
-    append_bundle_group(lines, "Static variables", deps["static_variables"], seen_definitions)
-    append_bundle_group(lines, "Structures and unions", deps["structures"], seen_definitions)
+    append_dependency_reference_summary(lines, deps, seen_definitions)
     append_skipped_auxiliary_group(lines, report.get("skipped_auxiliary_calls", []))
     lines.append("/* ===== Function sources: callees before callers ===== */")
     if not functions:
@@ -100,6 +97,787 @@ def render_subfunction_c_bundle(report: dict[str, object]) -> str:
         lines.append(str(function_report["source"]).rstrip())
         lines.append("")
     return "\n".join(lines)
+
+
+def append_subsource_compile_prelude(lines: list[str], report: dict[str, object]) -> None:
+    object_definitions = {
+        "__user": "",
+        "__force": "",
+        "__bitwise": "",
+        "__rcu": "",
+        "__must_check": "",
+        "__maybe_unused": "",
+        "__always_inline": "inline",
+        "noinline": "",
+        "__fix_address": "",
+        "__cold": "",
+        "__visible": "",
+        "__weak": "",
+        "__packed": "",
+        "__percpu": "",
+        "__net_init": "",
+        "____cacheline_aligned": "",
+        "__randomize_layout": "",
+        "NULL": "((void *)0)",
+        "true": "1",
+        "false": "0",
+        "INT_MAX": "2147483647",
+        "PAGE_MASK": "(~0UL)",
+        "EINVAL": "22",
+        "EOVERFLOW": "112",
+        "EBADF": "9",
+        "EFAULT": "14",
+        "EIOCBQUEUED": "529",
+        "EMSGSIZE": "90",
+        "ENETDOWN": "100",
+        "ENOMEM": "12",
+        "EPERM": "1",
+        "READ": "0",
+        "MAY_READ": "0x00000004",
+        "MAY_WRITE": "0x00000002",
+        "ITER_DEST": "0",
+        "FS_ACCESS": "0x00000001",
+        "PF_KTHREAD": "0x00200000",
+        "TIF_TAGGED_ADDR": "26",
+        "FMODE_READ": "((fmode_t)(1U << 0))",
+        "FMODE_CAN_READ": "((fmode_t)(1U << 17))",
+        "MAX_RW_COUNT": "((size_t)(INT_MAX & PAGE_MASK))",
+        "ARPHRD_CAN": "280",
+        "CHECKSUM_UNNECESSARY": "1",
+        "ETH_P_CAN": "0x000C",
+        "ETH_P_CANFD": "0x000D",
+        "ETH_P_CANXL": "0x000E",
+        "GFP_ATOMIC": "0",
+        "IFF_ECHO": "0x40000",
+        "IFF_UP": "0x1",
+        "PACKET_BROADCAST": "1",
+        "PACKET_HOST": "0",
+        "PACKET_LOOPBACK": "5",
+        "S_IRWXG": "00070",
+        "S_IRWXO": "00007",
+        "S_IRWXU": "00700",
+        "S_IRWXUGO": "(S_IRWXU|S_IRWXG|S_IRWXO)",
+        "S_ISGID": "0002000",
+        "S_ISUID": "0004000",
+        "S_ISVTX": "0001000",
+        "VALID_OPEN_FLAGS": "0",
+        "VALID_RESOLVE_FLAGS": "0",
+        "fallthrough": "do {} while (0)",
+    }
+    function_definitions = {
+        "__section": ("x", ""),
+        "__printf": ("a, b", ""),
+        "__attribute__": ("x", ""),
+        "likely": ("x", "(x)"),
+        "unlikely": ("x", "(x)"),
+        "IS_ENABLED": ("option", "0"),
+        "BUG_ON": ("x", "do { (void)(x); } while (0)"),
+        "DEBUG_NET_WARN_ON_ONCE": ("x", "do { (void)(x); } while (0)"),
+        "rcu_dereference_protected": ("p, c", "(p)"),
+        "rcu_dereference": ("p", "(p)"),
+        "READ_ONCE": ("x", "(x)"),
+        "offsetof": ("TYPE, MEMBER", "((size_t)0)"),
+        "IS_ERR_OR_NULL": ("x", "(!(x))"),
+        "PTR_ERR": ("x", "(-1)"),
+            "BIT": ("n", "(1UL << (n))"),
+            "BUILD_BUG_ON_MSG": ("cond, msg", "do { (void)(cond); } while (0)"),
+            "CLASS": ("_name, var", "struct filename *var = (struct filename *)"),
+            "FD_ADD": ("flags, file", "0"),
+        }
+    used_tokens = expand_prelude_required_tokens(
+        tokens_from_report_functions(report),
+        report,
+        object_definitions,
+        function_definitions,
+    )
+    lines.append("/* ===== Minimal compile support generated by cpp_meta_query ===== */")
+
+    append_used_defines(lines, used_tokens, object_definitions)
+    append_used_function_macros(lines, used_tokens, function_definitions)
+    append_used_typedefs(
+        lines,
+        used_tokens,
+        {
+            "bool": "int",
+            "size_t": "unsigned long",
+            "ssize_t": "long",
+            "loff_t": "long long",
+            "fmode_t": "unsigned int",
+            "u32": "unsigned int",
+            "u64": "unsigned long long",
+            "u8": "unsigned char",
+            "u16": "unsigned short",
+        },
+    )
+    append_safe_macro_definitions(lines, report, used_tokens)
+    lines.append("")
+    append_minimal_structs(lines, report)
+    append_linux_compat_stubs(lines, used_tokens)
+    append_external_call_stubs(lines, report)
+    lines.append("")
+
+
+def append_used_defines(lines: list[str], used_tokens: set[str], definitions: dict[str, str]) -> None:
+    for name, value in definitions.items():
+        if name in used_tokens:
+            lines.append(f"#define {name} {value}".rstrip())
+
+
+def append_used_function_macros(
+    lines: list[str],
+    used_tokens: set[str],
+    definitions: dict[str, tuple[str, str]],
+) -> None:
+    for name, (args, value) in definitions.items():
+        if name in used_tokens:
+            lines.append(f"#define {name}({args}) {value}".rstrip())
+
+
+def append_used_typedefs(lines: list[str], used_tokens: set[str], typedefs: dict[str, str]) -> None:
+    for name, definition in typedefs.items():
+        if name in used_tokens:
+            lines.append(f"typedef {definition} {name};")
+
+
+def expand_prelude_required_tokens(
+    used_tokens: set[str],
+    report: dict[str, object],
+    object_definitions: dict[str, str],
+    function_definitions: dict[str, tuple[str, str]],
+) -> set[str]:
+    expanded = set(used_tokens)
+    expanded.update(tokens_from_used_safe_macro_values(report, expanded))
+    definitions = dict(object_definitions)
+    definitions.update({name: value for name, (_args, value) in function_definitions.items()})
+
+    changed = True
+    while changed:
+        changed = False
+        for name, value in definitions.items():
+            if name not in expanded:
+                continue
+            for token in tokens_from_source(value):
+                if token in definitions or token in PRELUDE_TYPEDEF_NAMES:
+                    if token in expanded:
+                        continue
+                    expanded.add(token)
+                    changed = True
+            if name in function_definitions:
+                for token in tokens_from_source(function_definitions[name][0]):
+                    expanded.discard(token)
+    return expanded
+
+
+def tokens_from_used_safe_macro_values(report: dict[str, object], used_tokens: set[str]) -> set[str]:
+    tokens: set[str] = set()
+    for item in report.get("dependencies", {}).get("constants", []):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", ""))
+        if name not in used_tokens:
+            continue
+        macro = parse_simple_macro(str(item.get("snippet", "")), name)
+        if macro is None:
+            continue
+        _macro_name, macro_value = macro
+        tokens.update(tokens_from_source(macro_value))
+    return tokens
+
+
+def append_linux_compat_stubs(lines: list[str], used_tokens: set[str]) -> None:
+    emitted = False
+
+    def emit(line: str) -> None:
+        nonlocal emitted
+        lines.append(line)
+        emitted = True
+
+    if {"file", "unsigned_offsets", "security_file_permission", "fsnotify_file", "init_sync_kiocb"} & used_tokens:
+        emit("struct file;")
+    if {"iov_iter", "iov_iter_ubuf"} & used_tokens:
+        emit("struct iov_iter;")
+    if {"kiocb", "init_sync_kiocb"} & used_tokens:
+        emit("struct kiocb;")
+    if {"current", "get_current", "test_thread_flag", "add_rchar", "inc_syscr"} & used_tokens:
+        emit("struct task_struct { unsigned long flags; };")
+    if "get_current" in used_tokens or "current" in used_tokens:
+        emit("static inline struct task_struct *get_current(void)")
+        emit("{")
+        emit("    static struct task_struct task;")
+        emit("    return &task;")
+        emit("}")
+    if "current" in used_tokens:
+        emit("#define current get_current()")
+    if "test_thread_flag" in used_tokens:
+        emit("static inline int test_thread_flag(int flag) { (void)flag; return 0; }")
+    if "untagged_addr" in used_tokens:
+        emit("static inline const void *untagged_addr(const void *addr) { return addr; }")
+    if "__access_ok" in used_tokens:
+        emit("static inline int __access_ok(const void *addr, unsigned long size) { (void)addr; (void)size; return 1; }")
+    if "unsigned_offsets" in used_tokens:
+        emit("static inline int unsigned_offsets(struct file *file) { (void)file; return 0; }")
+    if "security_file_permission" in used_tokens:
+        emit("static inline int security_file_permission(struct file *file, int mask) { (void)file; (void)mask; return 0; }")
+    if "fsnotify_file_area_perm" in used_tokens:
+        emit("static inline int fsnotify_file_area_perm(struct file *file, int mask, const loff_t *ppos, size_t count) { (void)file; (void)mask; (void)ppos; (void)count; return 0; }")
+    if "init_sync_kiocb" in used_tokens:
+        emit("static inline void init_sync_kiocb(struct kiocb *kiocb, struct file *file) { (void)kiocb; (void)file; }")
+    if "iov_iter_ubuf" in used_tokens:
+        emit("static inline void iov_iter_ubuf(struct iov_iter *iter, int direction, char __user *buf, size_t len) { (void)iter; (void)direction; (void)buf; (void)len; }")
+    if "fsnotify_file" in used_tokens:
+        emit("static inline void fsnotify_file(struct file *file, int mask) { (void)file; (void)mask; }")
+    if "add_rchar" in used_tokens:
+        emit("static inline void add_rchar(struct task_struct *task, ssize_t value) { (void)task; (void)value; }")
+    if "inc_syscr" in used_tokens:
+        emit("static inline void inc_syscr(struct task_struct *task) { (void)task; }")
+    if "sock_efree" in used_tokens:
+        emit("static inline void sock_efree(void *arg) { (void)arg; }")
+    if "init_net" in used_tokens:
+        emit("static struct net *cpp_meta_init_net_ptr;")
+        emit("#define init_net (*cpp_meta_init_net_ptr)")
+    if emitted:
+        lines.append("")
+
+
+def append_minimal_structs(lines: list[str], report: dict[str, object]) -> None:
+    struct_fields, typedef_fields, scalar_typedefs, enum_names, enum_values, nested_function_fields = (
+        collect_minimal_type_hints(report)
+    )
+    for enum_name in sorted(enum_names):
+        lines.append(f"enum {enum_name} {{ cpp_meta_{enum_name}_value = 0 }};")
+    for enum_value in sorted(enum_values):
+        lines.append(f"#ifndef {enum_value}")
+        lines.append(f"#define {enum_value} 0")
+        lines.append("#endif")
+    if enum_names or enum_values:
+        lines.append("")
+
+    if "net" in struct_fields or "can_pkg_stats" in struct_fields:
+        lines.append("struct cpp_meta_net_can { struct can_pkg_stats *pkg_stats; };")
+        lines.append("")
+
+    for typedef_name in sorted(scalar_typedefs):
+        if typedef_name in BUILTIN_TYPE_NAMES or typedef_name in typedef_fields:
+            continue
+        if typedef_name.isupper():
+            continue
+        lines.append(f"typedef unsigned long {typedef_name};")
+    if scalar_typedefs:
+        lines.append("")
+
+    emitted_nested: set[str] = set()
+    for owner, fields in sorted(nested_function_fields.items()):
+        nested_name = f"cpp_meta_{owner}_ops"
+        emitted_nested.add(nested_name)
+        lines.append(f"struct {nested_name} {{")
+        for field in sorted(fields):
+            lines.append(f"    ssize_t (*{field})();")
+        lines.append("};")
+        lines.append("")
+
+    for name, fields in sorted(typedef_fields.items()):
+        lines.append(f"typedef struct {name} {{")
+        if not fields:
+            lines.append("    unsigned long cpp_meta_unused;")
+        for field in sorted(fields):
+            lines.append(field_declaration(name, field))
+        lines.append(f"}} {name};")
+        lines.append("")
+
+    for name, fields in sorted(struct_fields.items()):
+        lines.append(f"struct {name} {{")
+        if not fields:
+            lines.append("    unsigned long cpp_meta_unused;")
+        for field in sorted(fields):
+            nested_name = f"cpp_meta_{name}_{field}_ops"
+            if nested_name in emitted_nested:
+                lines.append(f"    struct {nested_name} *{field};")
+            else:
+                lines.append(field_declaration(name, field))
+        lines.append("};")
+        lines.append("")
+
+
+BUILTIN_TYPE_NAMES = {
+    "bool",
+    "char",
+    "double",
+    "float",
+    "fmode_t",
+    "int",
+    "loff_t",
+    "long",
+    "short",
+    "signed",
+    "size_t",
+    "ssize_t",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "unsigned",
+    "void",
+    "__bitwise",
+    "__force",
+    "__rcu",
+    "__user",
+}
+
+PRELUDE_TYPEDEF_NAMES = {
+    "bool",
+    "fmode_t",
+    "loff_t",
+    "size_t",
+    "ssize_t",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+}
+
+LINUX_COMPAT_STUB_NAMES = {
+    "__access_ok",
+    "add_rchar",
+    "fsnotify_file",
+    "fsnotify_file_area_perm",
+    "get_current",
+    "inc_syscr",
+    "init_sync_kiocb",
+    "iov_iter_ubuf",
+    "security_file_permission",
+    "test_thread_flag",
+    "unsigned_offsets",
+    "untagged_addr",
+}
+
+
+def field_declaration(type_name: str, field: str) -> str:
+    if type_name == "kiocb" and field == "ki_pos":
+        return "    loff_t ki_pos;"
+    if type_name == "file" and field == "f_mode":
+        return "    fmode_t f_mode;"
+    if type_name == "net" and field == "can":
+        return "    struct cpp_meta_net_can can;"
+    if type_name == "sk_buff" and field == "dev":
+        return "    struct net_device *dev;"
+    if type_name == "sk_buff" and field == "sk":
+        return "    struct sock *sk;"
+    if type_name == "net_device" and field == "nd_net":
+        return "    possible_net_t nd_net;"
+    if type_name == "net_device" and field == "_rx":
+        return "    struct netdev_rx_queue *_rx;"
+    if field in {"data", "head"}:
+        return f"    unsigned char *{field};"
+    if field in {"dev", "sk", "dst"}:
+        return f"    void *{field};"
+    if field in {"destructor"}:
+        return f"    void (*{field})(void *);"
+    if field in {"len", "flags", "pkt_type", "ip_summed", "protocol", "ifindex", "mtu", "type"}:
+        return f"    unsigned int {field};"
+    return f"    unsigned long {field};"
+
+
+def dependency_names(report: dict[str, object], group_name: str) -> set[str]:
+    deps = report.get("dependencies", {})
+    if not isinstance(deps, dict):
+        return set()
+    items = deps.get(group_name, [])
+    if not isinstance(items, list):
+        return set()
+    return {str(item.get("name", "")) for item in items if isinstance(item, dict) and item.get("name")}
+
+
+def strip_preprocessor_lines(source: str) -> str:
+    return "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+
+
+def append_safe_macro_definitions(
+    lines: list[str], report: dict[str, object], used_tokens: set[str]
+) -> None:
+    builtin_macros = {
+        "BUG_ON",
+        "ARPHRD_CAN",
+        "CHECKSUM_UNNECESSARY",
+        "BUILD_BUG_ON_MSG",
+        "CLASS",
+        "DEBUG_NET_WARN_ON_ONCE",
+        "EBADF",
+        "EFAULT",
+        "EIOCBQUEUED",
+        "EINVAL",
+        "EMSGSIZE",
+        "ENETDOWN",
+        "ENOMEM",
+        "EPERM",
+        "EOVERFLOW",
+        "ETH_P_CAN",
+        "ETH_P_CANFD",
+        "ETH_P_CANXL",
+        "FMODE_CAN_READ",
+        "FMODE_READ",
+        "FS_ACCESS",
+        "FD_ADD",
+        "GFP_ATOMIC",
+        "IFF_ECHO",
+        "IFF_UP",
+        "INT_MAX",
+        "IS_ENABLED",
+        "IS_ERR_OR_NULL",
+        "ITER_DEST",
+        "MAY_READ",
+        "MAY_WRITE",
+        "MAX_RW_COUNT",
+        "NULL",
+        "PAGE_MASK",
+        "PF_KTHREAD",
+        "PTR_ERR",
+        "READ",
+        "READ_ONCE",
+        "PACKET_BROADCAST",
+        "PACKET_HOST",
+        "PACKET_LOOPBACK",
+        "TIF_TAGGED_ADDR",
+        "__always_inline",
+        "__bitwise",
+        "__cold",
+        "__fix_address",
+        "__force",
+        "__maybe_unused",
+        "__must_check",
+        "__packed",
+        "__percpu",
+        "__printf",
+        "__randomize_layout",
+        "__rcu",
+        "__section",
+        "__user",
+        "__visible",
+        "__weak",
+        "false",
+        "likely",
+        "noinline",
+        "rcu_dereference_protected",
+        "rcu_dereference",
+        "true",
+        "unlikely",
+    }
+    emitted: set[str] = set()
+    for item in report.get("dependencies", {}).get("constants", []):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", ""))
+        if not name or name in builtin_macros or name in emitted:
+            continue
+        if not (name.isupper() or name.startswith("__") or name.startswith("CONFIG_")):
+            continue
+        if name not in used_tokens:
+            continue
+        snippet = str(item.get("snippet", ""))
+        macro = parse_simple_macro(snippet, name)
+        function_macro = parse_function_macro(snippet, name)
+        if macro is None and function_macro is None:
+            if not (name.isupper() or name.startswith("__") or name.startswith("CONFIG_")):
+                continue
+            macro_name, macro_value = name, "0"
+        elif function_macro is not None:
+            macro_name = function_macro
+            lines.append(f"#ifndef {macro_name}")
+            lines.append(f"#define {macro_name}(...) 0")
+            lines.append("#endif")
+            emitted.add(macro_name)
+            continue
+        else:
+            macro_name, macro_value = macro
+        lines.append(f"#ifndef {macro_name}")
+        lines.append(f"#define {macro_name} {macro_value}")
+        lines.append("#endif")
+        emitted.add(macro_name)
+
+
+def parse_simple_macro(snippet: str, expected_name: str) -> tuple[str, str] | None:
+    for line in snippet.splitlines():
+        stripped = line.strip()
+        match = re.match(r"#\s*define\s+([A-Za-z_]\w*)\s*(.*)$", stripped)
+        if not match:
+            continue
+        name, value = match.groups()
+        if name != expected_name:
+            continue
+        if "(" in name:
+            return None
+        value = sanitize_macro_value(value) or "1"
+        if "\\" in value or "##" in value or "#" in value:
+            return None
+        if value == name or re.search(rf"\b{re.escape(name)}\b", value):
+            return None
+        if "__asm" in value or "asm" in value or "__builtin" in value:
+            return None
+        return name, value
+    return None
+
+
+def parse_function_macro(snippet: str, expected_name: str) -> str | None:
+    pattern = rf"#\s*define\s+{re.escape(expected_name)}\("
+    if re.search(pattern, snippet):
+        return expected_name
+    return None
+
+
+def sanitize_macro_value(value: str) -> str:
+    value = re.sub(r"/\*.*", "", value)
+    value = re.sub(r"//.*", "", value)
+    return value.strip()
+
+
+def append_external_call_stubs(lines: list[str], report: dict[str, object]) -> None:
+    included_names = {
+        str(function_report.get("item", {}).get("name", ""))
+        for function_report in report.get("functions", [])
+        if isinstance(function_report, dict)
+    }
+    skip_names = included_names | {
+        "",
+        "if",
+        "for",
+        "while",
+        "switch",
+        "return",
+        "sizeof",
+        "typeof",
+        "likely",
+        "unlikely",
+        "IS_ENABLED",
+        "BUG_ON",
+        "DEBUG_NET_WARN_ON_ONCE",
+        "READ_ONCE",
+        "offsetof",
+        "rcu_dereference",
+        "rcu_dereference_protected",
+    } | LINUX_COMPAT_STUB_NAMES
+    emitted: set[str] = set()
+    direct_calls: set[str] = set()
+    for function_report in report.get("functions", []):
+        if not isinstance(function_report, dict):
+            continue
+        for call in function_report.get("calls", []):
+            if not isinstance(call, dict):
+                continue
+            expression = str(call.get("expression", ""))
+            if "->" in expression or "." in expression:
+                continue
+            name = str(call.get("callee", ""))
+            if name in skip_names or name in emitted:
+                continue
+            direct_calls.add(name)
+
+    if not direct_calls:
+        return
+    lines.append("/* External calls not expanded by subsource are stubbed for syntax checks. */")
+    macro_stubs = {
+        "atomic_long_inc": "do { (void)(x); } while (0)",
+        "dev_queue_xmit": "((void)(x), 0)",
+        "htons": "(x)",
+        "kfree_skb": "do { (void)(x); } while (0)",
+        "net_xmit_errno": "(x)",
+        "netif_rx": "((void)(x), 0)",
+        "refcount_inc_not_zero": "((void)(x), 1)",
+        "skb_clone": "((void)(x), (void)(flags), (struct sk_buff *)0)",
+        "skb_reset_mac_header": "do { (void)(x); } while (0)",
+        "skb_reset_network_header": "do { (void)(x); } while (0)",
+        "skb_reset_transport_header": "do { (void)(x); } while (0)",
+    }
+    for name in sorted(direct_calls):
+        if not re.match(r"^[A-Za-z_]\w*$", name):
+            continue
+        if name in macro_stubs:
+            lines.append(f"#ifndef {name}")
+            if name in {"htons", "net_xmit_errno"}:
+                lines.append(f"#define {name}(x) {macro_stubs[name]}")
+            elif name == "skb_clone":
+                lines.append(f"#define {name}(x, flags) {macro_stubs[name]}")
+            else:
+                lines.append(f"#define {name}(x) {macro_stubs[name]}")
+            lines.append("#endif")
+            emitted.add(name)
+            continue
+        lines.append(f"#ifndef {name}")
+        lines.append(f"#define {name}(...) 0")
+        lines.append("#endif")
+        emitted.add(name)
+
+
+def tokens_from_report_functions(report: dict[str, object]) -> set[str]:
+    tokens: set[str] = set()
+    for function_report in report.get("functions", []):
+        if isinstance(function_report, dict):
+            source = str(function_report.get("source", ""))
+            tokens.update(tokens_from_source(source))
+            tokens.update(re.findall(r"\b[A-Za-z_]\w*\b", source))
+    return tokens
+
+
+def collect_minimal_type_hints(
+    report: dict[str, object]
+) -> tuple[
+    dict[str, set[str]],
+    dict[str, set[str]],
+    set[str],
+    set[str],
+    set[str],
+    dict[str, set[str]],
+]:
+    var_types: dict[str, str] = {}
+    typedef_var_types: dict[str, str] = {}
+    struct_fields: dict[str, set[str]] = {}
+    typedef_fields: dict[str, set[str]] = {}
+    scalar_typedefs = dependency_names(report, "typedefs") - dependency_names(report, "constants")
+    enum_names = {
+        str(item.get("name", ""))
+        for item in report.get("dependencies", {}).get("enums", [])
+        if str(item.get("kind", "")) == "enum" and str(item.get("name", ""))
+    }
+    enum_values = {
+        str(item.get("name", ""))
+        for item in report.get("dependencies", {}).get("enums", [])
+        if str(item.get("kind", "")) == "enumerator" and str(item.get("name", ""))
+    }
+    nested_function_fields: dict[str, set[str]] = {}
+    sources = [str(function_report.get("source", "")) for function_report in report["functions"]]
+    for source in sources:
+        clean = strip_preprocessor_lines(source)
+        for match in re.finditer(r"\bstruct\s+([A-Za-z_]\w*)\s*\*+\s*([A-Za-z_]\w*)\b", source):
+            var_types[match.group(2)] = match.group(1)
+            struct_fields.setdefault(match.group(1), set())
+        for match in re.finditer(r"\bstruct\s+([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*[;=,)]", source):
+            var_types[match.group(2)] = match.group(1)
+            struct_fields.setdefault(match.group(1), set())
+        for match in re.finditer(r"\b([A-Za-z_]\w*)\s*\*+\s*([A-Za-z_]\w*)\b", clean):
+            type_name, var_name = match.groups()
+            if type_name in BUILTIN_TYPE_NAMES or type_name in {"struct", "union", "enum", "return"}:
+                continue
+            typedef_var_types[var_name] = type_name
+            scalar_typedefs.add(type_name)
+        for match in re.finditer(r"\benum\s+([A-Za-z_]\w*)\b", clean):
+            enum_names.add(match.group(1))
+
+    for source in sources:
+        for match in re.finditer(r"\b([A-Za-z_]\w*)->([A-Za-z_]\w*)->([A-Za-z_]\w*)\s*\(", source):
+            var_name, field_name, nested_call = match.groups()
+            struct_name = var_types.get(var_name)
+            if not struct_name:
+                continue
+            struct_fields.setdefault(struct_name, set()).add(field_name)
+            nested_function_fields.setdefault(f"{struct_name}_{field_name}", set()).add(nested_call)
+        for match in re.finditer(r"\b([A-Za-z_]\w*)->([A-Za-z_]\w*)\b", source):
+            var_name, field_name = match.groups()
+            struct_name = var_types.get(var_name)
+            if struct_name:
+                struct_fields.setdefault(struct_name, set()).add(field_name)
+                continue
+            typedef_name = typedef_var_types.get(var_name)
+            if typedef_name:
+                typedef_fields.setdefault(typedef_name, set()).add(field_name)
+        for match in re.finditer(r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\b", source):
+            var_name, field_name = match.groups()
+            struct_name = var_types.get(var_name)
+            if struct_name:
+                struct_fields.setdefault(struct_name, set()).add(field_name)
+                continue
+            typedef_name = typedef_var_types.get(var_name)
+            if typedef_name:
+                typedef_fields.setdefault(typedef_name, set()).add(field_name)
+        for match in re.finditer(r"\b([A-Za-z_]\w*)->([A-Za-z_]\w*)->([A-Za-z_]\w*)\b", source):
+            var_name, field_name, nested_field = match.groups()
+            struct_name = var_types.get(var_name)
+            if struct_name == "sk_buff" and field_name == "dev":
+                struct_fields.setdefault("sk_buff", set()).add("dev")
+                struct_fields.setdefault("net_device", set()).add(nested_field)
+        if "dev_net(" in source and "->can." in source:
+            struct_fields.setdefault("net", set()).add("can")
+    return struct_fields, typedef_fields, scalar_typedefs, enum_names, enum_values, nested_function_fields
+
+
+def append_dependency_reference_summary(
+    lines: list[str],
+    deps: dict[str, list[dict[str, object]]],
+    seen_definitions: set[tuple[str, str]],
+    *,
+    max_items_per_group: int = 80,
+) -> None:
+    lines.append("/* ===== Dependency reference summary (snippets omitted) ===== */")
+    lines.append("/* Original dependency code is not emitted here to keep this unit compact. */")
+    groups = [
+        ("Constants and macros", "constants"),
+        ("Typedefs", "typedefs"),
+        ("Enums and enumerators", "enums"),
+        ("Global variables", "global_variables"),
+        ("Static variables", "static_variables"),
+        ("Structures and unions", "structures"),
+    ]
+    for title, key in groups:
+        append_dependency_reference_group(
+            lines,
+            title,
+            deps.get(key, []),
+            seen_definitions,
+            max_items=max_items_per_group,
+        )
+
+
+def append_dependency_reference_group(
+    lines: list[str],
+    title: str,
+    items: list[dict[str, object]],
+    seen_definitions: set[tuple[str, str]],
+    *,
+    max_items: int,
+) -> None:
+    lines.append(f"/* --- {title} --- */")
+    if not items:
+        lines.append("/* not found */")
+        lines.append("")
+        return
+
+    seen_locations: set[tuple[str, str, int]] = set()
+    emitted = 0
+    omitted_by_limit = 0
+    omitted_duplicates = 0
+    for item in sort_bundle_items_by_references(items):
+        location_key = (str(item["file"]), str(item["name"]), int(item["start_line"]))
+        if location_key in seen_locations:
+            omitted_duplicates += 1
+            continue
+        seen_locations.add(location_key)
+
+        definition_key = bundle_definition_key(item)
+        if definition_key in seen_definitions:
+            omitted_duplicates += 1
+            continue
+        seen_definitions.add(definition_key)
+
+        if emitted >= max_items:
+            omitted_by_limit += 1
+            continue
+
+        start_line = item.get("start_line", "?")
+        end_line = item.get("end_line", start_line)
+        lines.append(
+            "/* - "
+            f"{item.get('kind', '<unknown>')} {item.get('name', '<unknown>')}: "
+            f"{item.get('file', '<unknown>')}:{start_line}-{end_line}"
+            " */"
+        )
+        emitted += 1
+
+    if emitted == 0:
+        lines.append("/* duplicate definitions omitted */")
+    if omitted_by_limit:
+        lines.append(
+            f"/* ... {omitted_by_limit} more unique references omitted from this compact summary */"
+        )
+    if omitted_duplicates:
+        lines.append(f"/* duplicate references omitted: {omitted_duplicates} */")
+    lines.append("")
 
 
 def append_skipped_auxiliary_group(lines: list[str], items: object) -> None:
@@ -443,6 +1221,4 @@ def print_markdown(report: dict[str, object]) -> None:
     print("## 说明")
     for note in report["notes"]:
         print(f"- {note}")
-
-
 

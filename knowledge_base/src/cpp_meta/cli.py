@@ -122,6 +122,9 @@ command-specific configuration:
                            Default: 4 levels.
   subsource:
     --output, -o PATH      Output .c bundle. Default: <function>_subfunctions_bundle.c
+                           Emits real target/child functions plus on-demand
+                           synthesized
+                           minimal compile support.
     --max-depth N          Downstream child-function recursion depth. Default: 3
     --max-functions N      Maximum function bodies included. Default: 200
     --max-nesting-depth N  Nested struct/union/enum/typedef recursion depth.
@@ -189,10 +192,11 @@ notes:
 
     subsource_parser = subparsers.add_parser(
         "subsource",
-        help="write target and downstream child functions into a .c bundle",
+        help="write target and downstream child functions into a compilable .c bundle",
         description=(
-            "Export a .c analysis bundle containing the target function, "
-            "recursively resolved child functions, and all collected dependency snippets. "
+            "Export a compilable .c analysis bundle containing the target function, "
+            "recursively resolved child functions, on-demand synthesized minimal compile support, "
+            "and compact original dependency references. "
             "Function bodies are ordered with callees before callers when possible. "
             "Symbols indexed from test/tests/testing/selftests/dt/st directories are excluded."
         ),

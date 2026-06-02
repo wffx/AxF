@@ -45,6 +45,13 @@ AUXILIARY_CALL_PREFIXES = (
     "kmsan_",
     "kmemleak_",
     "instrument_",
+    "raw_atomic",
+    "atomic_",
+    "__refcount",
+    "refcount_",
+    "__rcu",
+    "rcu_",
+    "preempt_",
     "profile_",
     "perf_",
     "add_rchar",
@@ -54,6 +61,22 @@ AUXILIARY_CALL_PREFIXES = (
     "task_io_account_",
     "acct_",
     "account_",
+    "__copy_skb_header",
+    "__dev_queue_xmit",
+    "__skb_",
+    "dev_queue_xmit",
+    "kfree_skb",
+    "kmem_cache_alloc",
+    "net_xmit_errno",
+    "netif_rx",
+    "skb_clone",
+    "skb_copy_",
+    "skb_headroom",
+    "skb_orphan",
+    "skb_reset_",
+    "skb_shinfo",
+    "skb_zcopy",
+    "sk_skb_",
 )
 AUXILIARY_CALL_CONTAINS = (
     "trace",
@@ -62,6 +85,8 @@ AUXILIARY_CALL_CONTAINS = (
     "log",
     "account",
     "acct",
+    "atomic",
+    "refcount",
 )
 AUXILIARY_PATH_PARTS = (
     "\\trace\\",
@@ -80,6 +105,12 @@ AUXILIARY_PATH_PARTS = (
     "/kcov/",
     "\\kmemleak",
     "/kmemleak",
+    "\\atomic\\",
+    "/atomic/",
+    "\\refcount",
+    "/refcount",
+    "\\instrumented",
+    "/instrumented",
 )
 
 
