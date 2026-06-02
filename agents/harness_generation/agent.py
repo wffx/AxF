@@ -172,10 +172,10 @@ def build_prompt(context: dict[str, str]) -> str:
 要求：
 1. 统一入口必须是 int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)。
 2. 生成最小可读的用户态 C 代码，优先用 Data/Size 构造 buffer、长度、flags、枚举、地址结构、sk_buff 形态输入。
-3. 如果目标严重依赖真实内核状态、硬件、并发或函数指针分派，请给出 unsupported 或 needs_manual_fixture，不要伪造成功。
+3. 即使没有额外 kRepo 知识产物，也要先尝试生成可编译 harness；不要因为上下文不足直接返回 unsupported。只有目标必须依赖不可模拟的真实硬件、真实内核并发语义或无法近似的函数指针分派时，才给出 unsupported 或 needs_manual_fixture。
 4. 只能生成文件内容，不要修改 Linux 源码。
 5. 生成代码会被本地 clang 立即编译验证；请尽量让 harness.c 和 mocks.c 可以仅依赖生成文件完成用户态编译。
-6. 生成目录内必须包含目标函数 {context['function']} 的可链接定义。不能只写函数声明；如果 prompt 中提供了 subsource bundle，优先基于它写用户态适配实现；如果缺少足够源码上下文，请标记 unsupported/needs_manual_fixture。
+6. 生成目录内必须包含目标函数 {context['function']} 的可链接定义。不能只写函数声明；如果 prompt 中提供了 subsource bundle，优先基于它写用户态适配实现；如果缺少源码上下文，请基于目标标识和通用 C/libFuzzer 经验写一个保守的用户态适配实现，并在 diagnostics/mock_rationale 中说明上下文受限。
 7. 不要通过空实现目标函数、跳过目标调用、只调用 mock 函数来伪造编译成功。
 8. dict.txt 只能包含短小 ASCII libFuzzer 字典项，最多 20 行；不要输出长二进制 blob，不要重复输出大量 \\x00。seed_hints 也必须短小。
 9. 同时给出 Unix build.sh 和 Windows build.ps1。编译命令以 clang 和 libFuzzer sanitizer 为默认假设即可。
@@ -217,7 +217,7 @@ def build_prompt_context_sections(context: dict[str, str]) -> str:
     if context.get("params"):
         sections.extend(["--- parameter constraints ---", context["params"], ""])
     if not sections:
-        return "未选择额外 kRepo 知识产物。请仅基于目标函数标识和通用 libFuzzer/C 经验生成；信息不足时标记 unsupported 或 needs_manual_fixture。"
+        return "未选择额外 kRepo 知识产物。请直接调用 LLM 的通用 C/libFuzzer 能力，基于目标函数标识生成最小可编译 harness。不要仅因缺少上下文而标记 unsupported；如需近似目标函数实现，请在 diagnostics/mock_rationale 中明确说明上下文受限。"
     return "\n".join(sections).rstrip()
 
 
@@ -699,9 +699,9 @@ def finish_compile(
 def compile_skip_reason(output_dir: Path, payload: dict[str, Any]) -> str:
     spec = payload.get("harness_spec")
     status = str(spec.get("status") if isinstance(spec, dict) else payload.get("status") or "").strip()
-    if status in {"unsupported", "needs_manual_fixture"}:
-        return f"compile skipped because harness status is {status}"
     if not (output_dir / "harness.c").exists():
+        if status in {"unsupported", "needs_manual_fixture"}:
+            return f"compile skipped because harness status is {status} and harness.c was not generated"
         return "compile skipped because harness.c was not generated"
     return ""
 

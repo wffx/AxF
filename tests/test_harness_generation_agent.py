@@ -286,6 +286,8 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertNotIn("--- report.json ---", prompt)
         self.assertNotIn("--- subsource bundle ---", prompt)
         self.assertIn("未选择额外 kRepo 知识产物", prompt)
+        self.assertIn("不要仅因缺少上下文而标记 unsupported", prompt)
+        self.assertNotIn("信息不足时标记 unsupported", prompt)
 
     def test_build_context_uses_only_explicit_krepo_prompt_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -354,15 +356,17 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertIn("variant 2/3", result.output)
         self.assertIn("missing runtime", result.output)
 
-    def test_compile_skip_reason_for_unsupported_or_missing_harness(self) -> None:
+    def test_compile_skip_reason_for_missing_harness_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.assertIn("harness.c", compile_skip_reason(root, {"harness_spec": {"status": "generated"}}))
-            (root / "harness.c").write_text("int x;\n", encoding="utf-8")
-
             reason = compile_skip_reason(root, {"harness_spec": {"status": "unsupported"}})
+            self.assertIn("unsupported", reason)
 
-        self.assertIn("unsupported", reason)
+            (root / "harness.c").write_text("int x;\n", encoding="utf-8")
+            reason_with_harness = compile_skip_reason(root, {"harness_spec": {"status": "unsupported"}})
+
+        self.assertEqual(reason_with_harness, "")
 
     def test_merge_repair_payload_keeps_unchanged_files(self) -> None:
         base = {

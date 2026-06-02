@@ -207,7 +207,7 @@ harness_generation_agent
 harness_generation_agent
 ```
 
-Agent 仍会收到目标函数名、文件路径和源码根目录，但不会收到未勾选的 kRepo 知识产物。以下文件是推荐上下文，不是硬性必需输入：
+Agent 仍会收到目标函数名、文件路径和源码根目录，并会直接调用 LLM 尝试生成 harness；不会因为未勾选 kRepo 上下文而在本地提前判定 unsupported。以下文件是推荐上下文，不是硬性必需输入：
 
 - `report.json`
 - `<function>_subsource_bundle.c`
@@ -658,7 +658,7 @@ compile.log
 }
 ```
 
-如果模型明确返回 `unsupported` 或没有生成 `harness.c`，编译会标记为 `skipped`。
+如果没有生成 `harness.c`，编译会标记为 `skipped`。如果模型返回 `unsupported` 但仍写出了 `harness.c`，Agent 仍会尝试编译，让编译结果决定后续状态。
 
 ### 7.7 10 秒试跑
 

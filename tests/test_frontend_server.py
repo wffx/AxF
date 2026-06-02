@@ -274,6 +274,20 @@ class FrontendServerTest(unittest.TestCase):
 
         self.assertEqual(failure, "任务未完成：Harness 仅生成，尚未编译验证")
 
+    def test_unsupported_harness_message_is_not_generic_uncompiled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp)
+            harness_dir = task_dir / "harness"
+            harness_dir.mkdir()
+            (harness_dir / "harness_spec.json").write_text(
+                '{"status":"unsupported","compile":{"status":"skipped"}}\n',
+                encoding="utf-8",
+            )
+
+            failure = _harness_failure_message(task_dir)
+
+        self.assertEqual(failure, "任务未完成：目标不支持自动生成")
+
     def test_harness_agent_without_spec_is_incomplete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = Path(tmp)

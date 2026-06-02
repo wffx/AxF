@@ -725,14 +725,14 @@ def _harness_failure_message(task_dir: Path) -> str:
         return "任务未完成：libFuzzer 试跑超时"
     if compile_status == "failed":
         return "任务未完成：Harness 编译失败"
-    if compile_status == "skipped":
-        return "任务未完成：Harness 未编译"
-    if compile_status == "success":
-        return "任务未完成：Harness 已编译但未完成 libFuzzer 试跑"
     if harness_status == "unsupported":
         return "任务未完成：目标不支持自动生成"
     if harness_status == "needs_manual_fixture":
         return "任务未完成：需要手工 Fixture"
+    if compile_status == "skipped":
+        return "任务未完成：Harness 未编译"
+    if compile_status == "success":
+        return "任务未完成：Harness 已编译但未完成 libFuzzer 试跑"
     if harness_status == "generated":
         return "任务未完成：Harness 仅生成，尚未编译验证"
     return ""
@@ -759,12 +759,12 @@ def _completion_message(task_dir: Path) -> str:
         return "任务完成：Harness 编译通过"
     if compile_status == "failed":
         return "任务完成：Harness 编译失败"
-    if compile_status == "skipped":
-        return "任务完成：Harness 未编译"
     if harness_status == "unsupported":
         return "任务完成：目标不支持自动生成"
     if harness_status == "needs_manual_fixture":
         return "任务完成：需要手工 Fixture"
+    if compile_status == "skipped":
+        return "任务完成：Harness 未编译"
     if harness_status:
         return f"任务完成：Harness 状态 {harness_status}"
     return "任务完成：kRepo 知识抽取完成"
