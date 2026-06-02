@@ -83,15 +83,32 @@ def item_query(where: str) -> str:
     """
 
 
+def file_filter_patterns(file_filter: str) -> list[str]:
+    normalized = file_filter.replace("\\\\", "\\")
+    variants = {
+        normalized.lower(),
+        normalized.replace("\\", "/").lower(),
+        normalized.replace("/", "\\").lower(),
+    }
+    return ["%" + variant + "%" for variant in sorted(variants) if variant]
+
+
+def append_file_filter(where: str, params: list[object], file_filter: str | None) -> str:
+    if not file_filter:
+        return where
+
+    patterns = file_filter_patterns(file_filter)
+    placeholders = " or ".join("lower(f.name) like ?" for _ in patterns)
+    params.extend(patterns)
+    return where + f" and ({placeholders})"
+
+
 def find_functions(
     con: sqlite3.Connection, name: str, file_filter: str | None = None
 ) -> list[CodeItem]:
     params: list[object] = [name]
     where = "ci.kind = 27 and ci.name = ?"
-    if file_filter:
-        file_filter = file_filter.replace("/", "\\").replace("\\\\", "\\")
-        where += " and lower(f.name) like ?"
-        params.append("%" + file_filter.lower() + "%")
+    where = append_file_filter(where, params, file_filter)
     rows = con.execute(
         item_query(where)
         + " order by (ci.end_line - ci.start_line) desc, ci.start_line",
@@ -109,10 +126,7 @@ def find_symbols(
     params: list[object] = [*kinds, name]
     placeholders = ",".join("?" for _ in kinds)
     where = f"ci.kind in ({placeholders}) and ci.name = ?"
-    if file_filter:
-        file_filter = file_filter.replace("/", "\\").replace("\\\\", "\\")
-        where += " and lower(f.name) like ?"
-        params.append("%" + file_filter.lower() + "%")
+    where = append_file_filter(where, params, file_filter)
     rows = con.execute(
         item_query(where)
         + """

@@ -17,7 +17,7 @@ from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MODEL = "glm-5.1"
+DEFAULT_MODEL = "gpt-5.5"
 MAX_REPORT_CHARS = 50_000
 MAX_SOURCE_CHARS = 90_000
 MAX_TEXT_CHARS = 24_000
@@ -173,8 +173,11 @@ def build_prompt(context: dict[str, str]) -> str:
 3. 如果目标严重依赖真实内核状态、硬件、并发或函数指针分派，请给出 unsupported 或 needs_manual_fixture，不要伪造成功。
 4. 只能生成文件内容，不要修改 Linux 源码。
 5. 生成代码会被本地 clang 立即编译验证；请尽量让 harness.c 和 mocks.c 可以仅依赖生成文件完成用户态编译。
-6. 同时给出 Unix build.sh 和 Windows build.ps1。编译命令以 clang 和 libFuzzer sanitizer 为默认假设即可。
-7. 输出必须是一个 JSON 对象，不要输出 Markdown。JSON schema：
+6. 生成目录内必须包含目标函数 {context['function']} 的可链接定义。不能只写函数声明；需要基于 subsource bundle 写用户态适配实现，或在无法适配时标记 unsupported/needs_manual_fixture。
+7. 不要通过空实现目标函数、跳过目标调用、只调用 mock 函数来伪造编译成功。
+8. dict.txt 只能包含短小 ASCII libFuzzer 字典项，最多 20 行；不要输出长二进制 blob，不要重复输出大量 \\x00。seed_hints 也必须短小。
+9. 同时给出 Unix build.sh 和 Windows build.ps1。编译命令以 clang 和 libFuzzer sanitizer 为默认假设即可。
+10. 输出必须是一个 JSON 对象，不要输出 Markdown。JSON schema：
 {{
   "classification": "byte_parser|skb_handler|sock_msg|net_device_state|unsupported|needs_manual_fixture",
   "unsupported_reason": "",
@@ -275,7 +278,34 @@ def request_harness_json(
                 continue
             raise HarnessGenerationError(error) from exc
 
-    content = raw if body["stream"] else _choice_content(json.loads(raw))
+    content = raw if body["stream"] else _choice_content_from_raw(raw)
+    if body["stream"] and not content:
+        fallback_body = dict(body)
+        fallback_body["stream"] = False
+        fallback_label = f"{interaction or 'llm'} non-stream fallback"
+        log_llm_interaction("request", fallback_label, transcript_path)
+        request = urllib.request.Request(
+            chat_url,
+            data=json.dumps(fallback_body).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw = read_chat_response(response, streaming=False)
+            content = _choice_content_from_raw(raw)
+        except (TimeoutError, socket.timeout) as exc:
+            error = f"非流式模型请求超时（{timeout} 秒）：{exc}"
+            append_llm_transcript(transcript_path, interaction=fallback_label, model=model, messages=messages, error=error)
+            raise HarnessGenerationError(error) from exc
+        except urllib.error.URLError as exc:
+            error = f"非流式请求模型失败：{exc}"
+            append_llm_transcript(transcript_path, interaction=fallback_label, model=model, messages=messages, error=error)
+            raise HarnessGenerationError(error) from exc
+
     append_llm_transcript(
         transcript_path,
         interaction=interaction,
@@ -285,10 +315,26 @@ def request_harness_json(
     )
     log_llm_interaction("response", interaction, transcript_path)
     if not content:
-        raise HarnessGenerationError("模型响应中没有 choices[0].message.content")
+        raise HarnessGenerationError(
+            "模型响应中没有 choices[0].message.content；响应预览："
+            + response_preview(raw)
+        )
     try:
         return parse_model_json(content)
     except json.JSONDecodeError as exc:
+        retry = retry_invalid_json_response(
+            chat_url=chat_url,
+            api_key=api_key,
+            model=model,
+            original_prompt=prompt,
+            base_body=body,
+            timeout=timeout,
+            transcript_path=transcript_path,
+            interaction=interaction,
+            error=exc,
+        )
+        if retry is not None:
+            return retry
         raise HarnessGenerationError(f"模型没有返回合法 JSON：{exc}") from exc
 
 
@@ -303,6 +349,65 @@ def log_llm_interaction(kind: str, interaction: str, transcript_path: Path | Non
 def log_llm_retry(error: str, request_attempt: int, max_retries: int) -> None:
     remaining = max_retries - request_attempt + 1
     print(f"{error}；准备重试，剩余 {remaining} 次", flush=True)
+
+
+def retry_invalid_json_response(
+    *,
+    chat_url: str,
+    api_key: str,
+    model: str,
+    original_prompt: str,
+    base_body: dict[str, Any],
+    timeout: int,
+    transcript_path: Path | None,
+    interaction: str,
+    error: json.JSONDecodeError,
+) -> dict[str, Any] | None:
+    retry_label = f"{interaction or 'llm'} JSON retry"
+    retry_prompt = (
+        original_prompt
+        + "\n\n上一轮响应不是合法 JSON，解析错误："
+        + str(error)
+        + "\n请重新输出一个完整、可被 json.loads 解析的 JSON 对象。"
+        + "\n额外限制：dict.txt 最多 20 行短 ASCII 字典项；不要输出长二进制 blob；不要输出大量重复的 \\x00；不要输出 Markdown。"
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": "你是 AxF Harness 生成 Agent，只输出一个 JSON 对象，内容用于写入本地 fuzz harness 文件。",
+        },
+        {"role": "user", "content": retry_prompt},
+    ]
+    body = dict(base_body)
+    body["messages"] = messages
+    body["stream"] = False
+
+    log_llm_interaction("request", retry_label, transcript_path)
+    request = urllib.request.Request(
+        chat_url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = read_chat_response(response, streaming=False)
+    except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+        append_llm_transcript(transcript_path, interaction=retry_label, model=model, messages=messages, error=str(exc))
+        return None
+
+    content = _choice_content_from_raw(raw)
+    append_llm_transcript(transcript_path, interaction=retry_label, model=model, messages=messages, assistant=content or raw)
+    log_llm_interaction("response", retry_label, transcript_path)
+    if not content:
+        return None
+    try:
+        return parse_model_json(content)
+    except json.JSONDecodeError:
+        return None
 
 
 def interaction_label(interaction: str, request_attempt: int, max_retries: int) -> str:
@@ -336,8 +441,11 @@ def read_chat_response(response: Any, *, streaming: bool) -> str:
 
 def read_streaming_chat_response(response: Any) -> str:
     parts: list[str] = []
+    raw_lines: list[str] = []
     for raw_line in response:
-        line = raw_line.decode("utf-8", errors="replace").strip()
+        decoded = raw_line.decode("utf-8", errors="replace")
+        raw_lines.append(decoded)
+        line = decoded.strip()
         if not line or not line.startswith("data:"):
             continue
         data = line.removeprefix("data:").strip()
@@ -356,7 +464,16 @@ def read_streaming_chat_response(response: Any) -> str:
             message = choice.get("message")
             if isinstance(message, dict) and message.get("content") is not None:
                 parts.append(str(message.get("content")))
-    return "".join(parts)
+    if parts:
+        return "".join(parts)
+
+    raw_text = "".join(raw_lines).strip()
+    if not raw_text:
+        return ""
+    try:
+        return _choice_content(json.loads(raw_text))
+    except json.JSONDecodeError:
+        return ""
 
 
 def append_llm_transcript(
@@ -413,17 +530,70 @@ def parse_model_json(content: str) -> dict[str, Any]:
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines).strip()
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise
-        value = json.loads(text[start : end + 1])
+    value = load_model_json_text(text)
     if not isinstance(value, dict):
         raise HarnessGenerationError("模型 JSON 顶层必须是对象")
     return value
+
+
+def load_model_json_text(text: str) -> Any:
+    candidates = [text, escape_json_string_controls(text)]
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        sliced = text[start : end + 1]
+        candidates.extend([sliced, escape_json_string_controls(sliced)])
+
+    last_error: json.JSONDecodeError | None = None
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise json.JSONDecodeError("empty JSON candidate", text, 0)
+
+
+def escape_json_string_controls(text: str) -> str:
+    result: list[str] = []
+    in_string = False
+    escaped = False
+
+    for char in text:
+        if not in_string:
+            result.append(char)
+            if char == '"':
+                in_string = True
+            continue
+
+        if escaped:
+            result.append(char)
+            escaped = False
+            continue
+
+        if char == "\\":
+            result.append(char)
+            escaped = True
+        elif char == '"':
+            result.append(char)
+            in_string = False
+        elif char == "\n":
+            result.append("\\n")
+        elif char == "\r":
+            result.append("\\r")
+        elif char == "\t":
+            result.append("\\t")
+        elif ord(char) < 0x20:
+            result.append(f"\\u{ord(char):04x}")
+        else:
+            result.append(char)
+
+    return "".join(result)
 
 
 def compile_and_repair(
@@ -525,48 +695,85 @@ def compile_harness(output_dir: Path, args: argparse.Namespace, attempt: int) ->
     clang = resolve_clang(args)
     binary_name = "fuzzer.exe" if os.name == "nt" else "fuzzer"
     log_path = output_dir / f"compile_attempt_{attempt}.log"
-    command = [
-        clang,
-        "-std=gnu11",
-        "-fsanitize=fuzzer,address,undefined",
-        "harness.c",
-        "mocks.c",
-        "-I.",
-        "-o",
-        binary_name,
-    ]
+    commands = compile_command_variants(clang, binary_name)
+    command = commands[0]
 
     if not clang or (Path(clang).name == clang and shutil.which(clang) is None):
         output = f"clang executable not found: {clang or '<empty>'}\n"
         log_path.write_text(output, encoding="utf-8")
         return CompileResult(attempt, command, 127, output, log_path)
 
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=output_dir,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=max(1, int(args.compile_timeout)),
-            check=False,
-        )
-        output = completed.stdout or ""
-        log_path.write_text(output, encoding="utf-8")
-        return CompileResult(attempt, command, completed.returncode, output, log_path)
-    except subprocess.TimeoutExpired as exc:
-        output = (exc.stdout or "") + (exc.stderr or "")
-        output += f"\ncompile timed out after {args.compile_timeout} seconds\n"
-        log_path.write_text(output, encoding="utf-8")
-        return CompileResult(attempt, command, 124, output, log_path, timed_out=True)
-    except OSError as exc:
-        output = f"failed to start compiler: {exc}\n"
-        log_path.write_text(output, encoding="utf-8")
-        return CompileResult(attempt, command, 127, output, log_path)
+    logs: list[str] = []
+    last_result: CompileResult | None = None
+    for index, command in enumerate(commands, start=1):
+        label = f"variant {index}/{len(commands)}"
+        logs.extend([f"## {label}", "$ " + " ".join(command), ""])
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=output_dir,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=max(1, int(args.compile_timeout)),
+                check=False,
+            )
+            output = completed.stdout or ""
+            logs.extend([output.rstrip(), f"returncode: {completed.returncode}", ""])
+            last_result = CompileResult(attempt, command, completed.returncode, output, log_path)
+            if completed.returncode == 0:
+                combined = "\n".join(logs).rstrip() + "\n"
+                log_path.write_text(combined, encoding="utf-8")
+                return CompileResult(attempt, command, 0, combined, log_path)
+        except subprocess.TimeoutExpired as exc:
+            output = (exc.stdout or "") + (exc.stderr or "")
+            output += f"\ncompile timed out after {args.compile_timeout} seconds\n"
+            logs.extend([output.rstrip(), "returncode: 124", ""])
+            combined = "\n".join(logs).rstrip() + "\n"
+            log_path.write_text(combined, encoding="utf-8")
+            return CompileResult(attempt, command, 124, combined, log_path, timed_out=True)
+        except OSError as exc:
+            output = f"failed to start compiler: {exc}\n"
+            logs.extend([output.rstrip(), "returncode: 127", ""])
+            last_result = CompileResult(attempt, command, 127, output, log_path)
+
+    combined = "\n".join(logs).rstrip() + "\n"
+    log_path.write_text(combined, encoding="utf-8")
+    if last_result is None:
+        return CompileResult(attempt, command, 127, combined, log_path)
+    return CompileResult(attempt, last_result.command, last_result.returncode, combined, log_path)
 
 
 def resolve_clang(args: argparse.Namespace) -> str:
-    return args.clang or os.environ.get("CLANG") or "clang"
+    configured = getattr(args, "clang", "") or os.environ.get("CLANG") or ""
+    if configured:
+        return configured
+    if os.name != "nt":
+        homebrew_clang = Path("/opt/homebrew/opt/llvm/bin/clang")
+        if homebrew_clang.exists():
+            return str(homebrew_clang)
+    return "clang"
+
+
+def compile_command_variants(clang: str, binary_name: str) -> list[list[str]]:
+    sanitizer_sets = [
+        "fuzzer,address,undefined",
+        "fuzzer,address",
+        "fuzzer",
+    ]
+    return [
+        [
+            clang,
+            "-std=gnu11",
+            f"-fsanitize={sanitizers}",
+            "harness.c",
+            "mocks.c",
+            "-I.",
+            "-o",
+            binary_name,
+        ]
+        for sanitizers in sanitizer_sets
+    ]
 
 
 def run_harness(output_dir: Path, args: argparse.Namespace) -> RunResult:
@@ -631,8 +838,10 @@ def build_repair_prompt(
 2. 不要修改 Linux 源码，不要依赖真实内核构建环境。
 3. 继续保持入口 int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)。
 4. 优先补齐缺失类型、常量、函数声明和最小 mock；不要通过删除目标函数调用来让编译通过。
-5. 这是轻量修复轮。只返回需要修改的文件，不要重复未修改文件。
-6. 输出必须是一个 JSON 对象，不要输出 Markdown。最小 schema：
+5. 如果诊断包含 undefined symbol 或 undefined reference to {context['function']}，必须在 harness.c 或 mocks.c 中提供目标函数的用户态适配定义，不能只补 prototype。
+6. 不要通过空实现目标函数、删除目标调用、只调用 mock 函数来伪造编译成功。
+7. 这是轻量修复轮。只返回需要修改的文件，不要重复未修改文件。
+8. 输出必须是一个 JSON 对象，不要输出 Markdown。最小 schema：
 {{
   "classification": "可选，沿用原分类时可省略",
   "mock_rationale": "简短说明本轮修复了什么",
@@ -967,8 +1176,32 @@ def _choice_content(envelope: dict[str, Any]) -> str:
         content = message.get("content")
         if isinstance(content, str):
             return content
+    delta = first.get("delta")
+    if isinstance(delta, dict):
+        content = delta.get("content")
+        if isinstance(content, str):
+            return content
     text = first.get("text")
     return text if isinstance(text, str) else ""
+
+
+def _choice_content_from_raw(raw: str) -> str:
+    try:
+        envelope = json.loads(raw)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(envelope, dict):
+        return ""
+    return _choice_content(envelope)
+
+
+def response_preview(raw: str, limit: int = 800) -> str:
+    preview = raw.strip().replace("\n", "\\n")
+    if not preview:
+        return "<empty>"
+    if len(preview) > limit:
+        return preview[:limit] + "...<truncated>"
+    return preview
 
 
 def _legacy_files(payload: dict[str, Any]) -> list[dict[str, str]]:
@@ -1018,13 +1251,29 @@ def _env_first(*names: str) -> str:
 def default_build_sh() -> str:
     return """#!/usr/bin/env bash
 set -euo pipefail
-clang -std=gnu11 -fsanitize=fuzzer,address,undefined harness.c mocks.c -I. -o fuzzer
+
+CC="${CC:-/opt/homebrew/opt/llvm/bin/clang}"
+if [ ! -x "$CC" ]; then
+  CC="clang"
+fi
+
+"$CC" -std=gnu11 -fsanitize=fuzzer,address,undefined harness.c mocks.c -I. -o fuzzer || \
+"$CC" -std=gnu11 -fsanitize=fuzzer,address harness.c mocks.c -I. -o fuzzer || \
+"$CC" -std=gnu11 -fsanitize=fuzzer harness.c mocks.c -I. -o fuzzer
 """
 
 
 def default_build_ps1() -> str:
     return """$ErrorActionPreference = "Stop"
-clang -std=gnu11 -fsanitize=fuzzer,address,undefined harness.c mocks.c -I. -o fuzzer.exe
+$cc = if ($env:CLANG) { $env:CLANG } else { "clang" }
+& $cc -std=gnu11 -fsanitize=fuzzer,address,undefined harness.c mocks.c -I. -o fuzzer.exe
+if ($LASTEXITCODE -ne 0) {
+  & $cc -std=gnu11 -fsanitize=fuzzer,address harness.c mocks.c -I. -o fuzzer.exe
+}
+if ($LASTEXITCODE -ne 0) {
+  & $cc -std=gnu11 -fsanitize=fuzzer harness.c mocks.c -I. -o fuzzer.exe
+}
+exit $LASTEXITCODE
 """
 
 

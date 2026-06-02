@@ -311,7 +311,7 @@ function completedStatusLabel(task) {
   const compile = harness.compile || {};
   const run = harness.run || {};
   if (run.status === "success") {
-    return "试跑通过";
+    return "编译通过";
   }
   if (run.status === "failed") {
     return "试跑失败";
@@ -332,7 +332,7 @@ function completedStatusLabel(task) {
     return skippedStatusLabel(harness.status);
   }
   if (harness.status === "run_succeeded") {
-    return "试跑通过";
+    return "编译通过";
   }
   if (harness.status === "runtime_failed") {
     return "试跑失败";
@@ -462,7 +462,7 @@ function compileStageLabel(compile) {
 function runStageLabel(run) {
   const seconds = run.seconds || 10;
   if (run.status === "success") {
-    return `${seconds} 秒试跑通过`;
+    return `编译通过`;
   }
   if (run.status === "timeout") {
     return `${seconds} 秒试跑超时`;

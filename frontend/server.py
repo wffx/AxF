@@ -325,7 +325,7 @@ def default_config() -> dict[str, Any]:
         "function": "can_send",
         "file": "net/can/af_can.c",
         "artifacts": ["report_md", "report_json", "subsource", "calls", "params", HARNESS_AGENT_ARTIFACT],
-        "model": "glm-5.1",
+        "model": "gpt-5.5",
         "chat_url": "",
         "api_key_env": "API_KEY",
         "model_timeout": DEFAULT_MODEL_TIMEOUT,
@@ -646,7 +646,7 @@ def _completion_message(task_dir: Path) -> str:
     compile_status = str(compile_info.get("status") or "")
 
     if run_status == "success":
-        return "任务完成：libFuzzer 试跑通过"
+        return "任务完成：Harness 编译通过"
     if run_status == "failed":
         return "任务完成：libFuzzer 试跑失败"
     if run_status == "timeout":
@@ -695,7 +695,7 @@ def _run_event_message(run_info: dict[str, Any]) -> str:
     seconds = run_info.get("seconds") or 10
     message = str(run_info.get("message") or "").strip()
     if status == "success":
-        return f"libFuzzer 试跑通过（{seconds} 秒），日志见 10 秒运行日志"
+        return f"Harness 编译通过（libFuzzer 已运行 {seconds} 秒），日志见 10 秒运行日志"
     if status == "timeout":
         return f"libFuzzer 试跑超时（{seconds} 秒），日志见 10 秒运行日志"
     if status == "failed":

@@ -21,12 +21,21 @@ from src.cpp_meta_query import (
     print_symbol_source,
 )
 from src.cpp_meta.base import QueryOptions
+from src.cpp_meta.db import file_filter_patterns
 from src.cpp_meta.filters import is_test_symbol_path
 from src.cpp_meta.report import ReportCommand
 from src.cpp_meta.renderer import render_subfunction_c_bundle
 
 
 TEST_REPO = os.environ.get("KREPO_TEST_REPO", "linux-7.0")
+
+
+class CppMetaQueryPathFilterTest(unittest.TestCase):
+    def test_file_filter_patterns_accept_posix_and_windows_paths(self) -> None:
+        patterns = file_filter_patterns("net/can/af_can.c")
+
+        self.assertIn("%net/can/af_can.c%", patterns)
+        self.assertIn(r"%net\can\af_can.c%", patterns)
 
 
 @unittest.skipUnless(
@@ -264,4 +273,3 @@ class CppMetaQuerySmokeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

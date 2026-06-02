@@ -69,7 +69,7 @@ class FrontendServerTest(unittest.TestCase):
                 "function": "can_send",
                 "file": "net/can/af_can.c",
                 "artifacts": ["harness_generation_agent"],
-                "model": "glm-5.1",
+                "model": "gpt-5.5",
                 "chat_url": "https://example.invalid/v1/chat/completions",
                 "api_key_env": "API_KEY",
                 "model_max_retries": 2,
@@ -87,7 +87,7 @@ class FrontendServerTest(unittest.TestCase):
         harness_command = steps[-1].command
         command_text = " ".join(harness_command)
         self.assertIn("-m agents.harness_generation.agent", command_text)
-        self.assertIn("--model glm-5.1", command_text)
+        self.assertIn("--model gpt-5.5", command_text)
         self.assertIn("--api-key-env API_KEY", command_text)
         self.assertIn("--timeout 300", command_text)
         self.assertIn("--max-retries 2", command_text)
@@ -185,7 +185,7 @@ class FrontendServerTest(unittest.TestCase):
 
         self.assertEqual([event["phase"] for event in events], ["harness_compile", "harness_run"])
         self.assertIn("编译通过", events[0]["message"])
-        self.assertIn("libFuzzer 试跑通过", events[1]["message"])
+        self.assertIn("编译通过", events[1]["message"])
 
     def test_compile_failed_harness_is_not_a_completed_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
