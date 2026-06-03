@@ -29,6 +29,7 @@ from agents.harness_generation.agent import (
     read_streaming_chat_response,
     request_harness_json,
     resolve_clang,
+    resolve_cli_executable,
     run_harness,
     update_spec_compile,
     update_spec_run,
@@ -118,6 +119,24 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertEqual(command[:4], ["opencode", "run", "--dir", str(PROJECT_ROOT)])
         self.assertEqual(command[4:6], ["--model", "anthropic/claude-sonnet-4"])
         self.assertEqual(command[-1], "生成 harness")
+
+    def test_resolve_cli_executable_uses_windows_shell_lookup(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["cmd", "/d", "/c", 'where "nga"'],
+            0,
+            stdout="C:\\Users\\yufei\\scoop\\shims\\nga.cmd\n",
+            stderr="",
+        )
+
+        with (
+            mock.patch("agents.harness_generation.agent.os.name", "nt"),
+            mock.patch("agents.harness_generation.agent.shutil.which", return_value=None),
+            mock.patch("agents.harness_generation.agent.subprocess.run", return_value=completed) as run,
+        ):
+            resolved = resolve_cli_executable("nga")
+
+        self.assertEqual(resolved, "C:\\Users\\yufei\\scoop\\shims\\nga.cmd")
+        self.assertEqual(run.call_args.args[0][:3], ["cmd", "/d", "/c"])
 
     def test_request_harness_json_invokes_opencode_cli(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

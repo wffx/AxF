@@ -438,7 +438,11 @@ def request_harness_json_with_opencode(
                 continue
             raise HarnessGenerationError(error) from exc
         except OSError as exc:
-            error = f"opencode CLI 启动失败：{exc}"
+            error = (
+                f"opencode CLI 启动失败：{exc}。"
+                "如果命令在你的终端可用但前端任务不可用，请重启前端服务，"
+                "或在模型设置里填写 CLI 的绝对路径，例如 nga.exe/nga.cmd 的完整路径。"
+            )
             append_llm_transcript(transcript_path, interaction=attempt_label, model=model or "opencode-default", messages=messages, error=error)
             raise HarnessGenerationError(error) from exc
 
@@ -485,11 +489,94 @@ def normalize_llm_mode(value: str) -> str:
 
 def build_opencode_command(*, executable: str, repo: str, prompt: str, model: str = "") -> list[str]:
     repo_dir = resolve_repo_dir(repo)
-    command = [executable or DEFAULT_OPENCODE_EXECUTABLE, "run", "--dir", str(repo_dir)]
+    command = [resolve_cli_executable(executable), "run", "--dir", str(repo_dir)]
     if model:
         command.extend(["--model", model])
     command.append(prompt)
     return command
+
+
+def resolve_cli_executable(executable: str) -> str:
+    name = (executable or DEFAULT_OPENCODE_EXECUTABLE).strip()
+    path = Path(name).expanduser()
+    if path.is_absolute() or os.sep in name or (os.altsep and os.altsep in name):
+        return str(path)
+    resolved = shutil.which(name)
+    if resolved:
+        return resolved
+    return resolve_cli_executable_from_shell(name) or name
+
+
+def resolve_cli_executable_from_shell(executable: str) -> str:
+    if os.name == "nt":
+        return resolve_windows_cli_executable(executable)
+    return resolve_posix_cli_executable(executable)
+
+
+def resolve_windows_cli_executable(executable: str) -> str:
+    powershell_name = executable.replace("'", "''")
+    commands = [
+        ["cmd", "/d", "/c", f'where "{executable}"'],
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            f"Get-Command -Name '{powershell_name}' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source",
+        ],
+    ]
+    for command in commands:
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=3,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if completed.returncode != 0:
+            continue
+        for line in completed.stdout.splitlines():
+            candidate = line.strip()
+            if candidate:
+                return candidate
+    return ""
+
+
+def resolve_posix_cli_executable(executable: str) -> str:
+    shells = []
+    configured_shell = os.environ.get("SHELL")
+    if configured_shell:
+        shells.append(configured_shell)
+    shells.extend(["/bin/zsh", "/bin/bash"])
+    seen: set[str] = set()
+    for shell in shells:
+        if not shell or shell in seen or not Path(shell).exists():
+            continue
+        seen.add(shell)
+        for flag in ["-lc", "-lic"]:
+            try:
+                completed = subprocess.run(
+                    [shell, flag, f"command -v {shlex.quote(executable)}"],
+                    cwd=PROJECT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=3,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if completed.returncode != 0:
+                continue
+            for line in completed.stdout.splitlines():
+                candidate = line.strip()
+                if candidate and Path(candidate).expanduser().is_absolute():
+                    return str(Path(candidate).expanduser())
+    return ""
 
 
 def resolve_repo_dir(value: str) -> Path:
