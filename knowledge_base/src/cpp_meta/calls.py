@@ -175,9 +175,9 @@ def function_line_has_call(function_item: CodeItem, line: int, callee_name: str)
     return re.search(rf"\b{re.escape(callee_name)}\s*\(", clean_lines[offset]) is not None
 
 
-def iter_call_matches_with_rg(repo: Path, callee_name: str) -> list[tuple[str, int, str]]:
+def iter_call_matches_with_rg(repo: Path, callee_name: str) -> list[tuple[str, int, str]] | None:
     if shutil.which("rg") is None:
-        return []
+        return None
     pattern = rf"\b{re.escape(callee_name)}\s*\("
     cmd = [
         "rg",
@@ -197,9 +197,9 @@ def iter_call_matches_with_rg(repo: Path, callee_name: str) -> list[tuple[str, i
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     except OSError:
-        return []
+        return None
     if proc.returncode not in (0, 1):
-        return []
+        return None
     matches: list[tuple[str, int, str]] = []
     for raw in proc.stdout.splitlines():
         match = re.match(r"^(.*?):(\d+):(.*)$", raw)
@@ -213,10 +213,12 @@ def iter_call_matches_with_rg(repo: Path, callee_name: str) -> list[tuple[str, i
 
 def iter_call_matches_multi_with_rg(
     repo: Path, callee_names: set[str], chunk_size: int = 80
-) -> list[tuple[str, str, int, str]]:
+) -> list[tuple[str, str, int, str]] | None:
     rg_path = shutil.which("rg")
-    if rg_path is None or not callee_names:
+    if not callee_names:
         return []
+    if rg_path is None:
+        return None
     matches: list[tuple[str, str, int, str]] = []
     names = sorted(callee_names, key=lambda value: (-len(value), value))
     for name_chunk in chunked(names, chunk_size):
@@ -246,9 +248,9 @@ def iter_call_matches_multi_with_rg(
                 errors="replace",
             )
         except OSError:
-            continue
+            return None
         if proc.returncode not in (0, 1):
-            continue
+            return None
         line_call_re = re.compile(rf"\b({alternation})\s*\(")
         for raw in proc.stdout.splitlines():
             match = re.match(r"^(.*?):(\d+):(.*)$", raw)
@@ -285,7 +287,7 @@ def find_direct_callers(
     max_callers: int = 100,
 ) -> list[CallerSite]:
     matches = iter_call_matches_with_rg(repo, callee_name)
-    if not matches:
+    if matches is None:
         matches = iter_call_matches_fallback(repo, callee_name)
 
     callers: dict[int, CallerSite] = {}
@@ -316,11 +318,14 @@ def find_direct_callers_multi(
     max_callers_per_name: int = 100,
 ) -> dict[str, list[CallerSite]]:
     grouped: dict[str, dict[int, CallerSite]] = {name: {} for name in callee_names}
-    matches = iter_call_matches_multi_with_rg(repo, callee_names)
-    if not matches:
+    rg_matches = iter_call_matches_multi_with_rg(repo, callee_names)
+    if rg_matches is None:
+        matches: list[tuple[str, str, int, str]] = []
         for name in callee_names:
             for path_text, line, source_line in iter_call_matches_fallback(repo, name):
                 matches.append((name, path_text, line, source_line))
+    else:
+        matches = rg_matches
 
     function_call_cache: dict[tuple[int, int, str], bool] = {}
     for callee_name, path_text, line, _source_line in matches:
@@ -522,4 +527,3 @@ def order_functions_for_bundle(
     ):
         visit(function_id)
     return ordered
-

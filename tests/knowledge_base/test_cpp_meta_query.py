@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import io
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "knowledge_base"))
@@ -21,6 +23,7 @@ from src.cpp_meta_query import (
     print_symbol_source,
 )
 from src.cpp_meta.base import QueryOptions
+from src.cpp_meta import calls as calls_module
 from src.cpp_meta.db import file_filter_patterns
 from src.cpp_meta.filters import is_test_symbol_path
 from src.cpp_meta.report import ReportCommand
@@ -36,6 +39,23 @@ class CppMetaQueryPathFilterTest(unittest.TestCase):
 
         self.assertIn("%net/can/af_can.c%", patterns)
         self.assertIn(r"%net\can\af_can.c%", patterns)
+
+    def test_empty_rg_result_does_not_fall_back_to_python_scan(self) -> None:
+        rg_empty = subprocess.CompletedProcess(args=["rg"], returncode=1, stdout="", stderr="")
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("src.cpp_meta.calls.shutil.which", return_value="rg"):
+                with mock.patch("src.cpp_meta.calls.subprocess.run", return_value=rg_empty):
+                    with mock.patch("src.cpp_meta.calls.iter_call_matches_fallback") as fallback:
+                        fallback.side_effect = AssertionError("fallback should not run after rg found no matches")
+                        callers = calls_module.find_direct_callers(mock.Mock(), Path(tmp), "missing_symbol")
+                        grouped = calls_module.find_direct_callers_multi(
+                            mock.Mock(),
+                            Path(tmp),
+                            {"missing_symbol"},
+                        )
+
+        self.assertEqual(callers, [])
+        self.assertEqual(grouped, {"missing_symbol": []})
 
 
 @unittest.skipUnless(
