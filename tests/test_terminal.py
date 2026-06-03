@@ -50,6 +50,8 @@ class TerminalTest(unittest.TestCase):
                 "report_json,params,harness_generation_agent",
                 "--model",
                 "glm-5.1",
+                "--clang-mode",
+                "wsl",
                 "--knowledge-dir",
                 "workspace/web/tasks/old",
             ]
@@ -59,6 +61,7 @@ class TerminalTest(unittest.TestCase):
 
         self.assertEqual(config["artifacts"], ["report_json", "params", HARNESS_AGENT_ARTIFACT])
         self.assertEqual(config["model"], "glm-5.1")
+        self.assertEqual(config["clang_mode"], "wsl")
         self.assertEqual(config["file"], "net/can/af_can.c")
         self.assertEqual(config["knowledge_dir"], "workspace/web/tasks/old")
 

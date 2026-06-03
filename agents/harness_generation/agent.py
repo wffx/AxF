@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import socket
 import stat
@@ -102,6 +103,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-retries", type=int, default=DEFAULT_LLM_MAX_RETRIES)
     parser.add_argument("--no-stream", action="store_true", help="disable streaming Chat Completions responses")
     parser.add_argument("--clang", default="", help="clang path used for local compile validation")
+    parser.add_argument("--clang-mode", choices=["native", "wsl"], default="native", help="compile with native clang or WSL clang")
     parser.add_argument("--max-repair-rounds", type=int, default=DEFAULT_MAX_REPAIR_ROUNDS)
     parser.add_argument("--compile-timeout", type=int, default=60)
     parser.add_argument("--skip-compile", action="store_true", help="generate files without compile validation")
@@ -772,13 +774,16 @@ def compile_skip_reason(output_dir: Path, payload: dict[str, Any]) -> str:
 
 
 def compile_harness(output_dir: Path, args: argparse.Namespace, attempt: int) -> CompileResult:
+    mode = clang_mode(args)
     clang = resolve_clang(args)
-    binary_name = "fuzzer.exe" if os.name == "nt" else "fuzzer"
+    binary_name = "fuzzer" if mode == "wsl" else native_binary_name()
     log_path = output_dir / f"compile_attempt_{attempt}.log"
-    commands = compile_command_variants(clang, binary_name)
+    commands = compile_commands_for_mode(output_dir, clang, binary_name, mode, log_path, attempt, args)
+    if isinstance(commands, CompileResult):
+        return commands
     command = commands[0]
 
-    if not clang or (Path(clang).name == clang and shutil.which(clang) is None):
+    if mode == "native" and (not clang or (Path(clang).name == clang and shutil.which(clang) is None)):
         output = f"clang executable not found: {clang or '<empty>'}\n"
         log_path.write_text(output, encoding="utf-8")
         return CompileResult(attempt, command, 127, output, log_path)
@@ -828,11 +833,47 @@ def resolve_clang(args: argparse.Namespace) -> str:
     configured = getattr(args, "clang", "") or os.environ.get("CLANG") or ""
     if configured:
         return configured
+    if clang_mode(args) == "wsl":
+        return "/usr/bin/clang"
     if os.name != "nt":
         homebrew_clang = Path("/opt/homebrew/opt/llvm/bin/clang")
         if homebrew_clang.exists():
             return str(homebrew_clang)
     return "clang"
+
+
+def clang_mode(args: argparse.Namespace) -> str:
+    mode = str(getattr(args, "clang_mode", "") or "native").strip().lower()
+    return "wsl" if mode == "wsl" else "native"
+
+
+def native_binary_name() -> str:
+    return "fuzzer.exe" if os.name == "nt" else "fuzzer"
+
+
+def compile_commands_for_mode(
+    output_dir: Path,
+    clang: str,
+    binary_name: str,
+    mode: str,
+    log_path: Path,
+    attempt: int,
+    args: argparse.Namespace,
+) -> list[list[str]] | CompileResult:
+    native_commands = compile_command_variants(clang, binary_name)
+    if mode != "wsl":
+        return native_commands
+    if shutil.which("wsl") is None:
+        command = wsl_shell_command("<task-dir>", native_commands[0])
+        output = "WSL executable not found. Use clang mode native, or install and enable WSL.\n"
+        log_path.write_text(output, encoding="utf-8")
+        return CompileResult(attempt, command, 127, output, log_path)
+    wsl_dir, error = resolve_wsl_path(output_dir, min(10, max(1, int(getattr(args, "compile_timeout", 60)))))
+    if error:
+        command = ["wsl", "wslpath", "-a", str(output_dir)]
+        log_path.write_text(error, encoding="utf-8")
+        return CompileResult(attempt, command, 127, error, log_path)
+    return [wsl_shell_command(wsl_dir, command) for command in native_commands]
 
 
 def compile_command_variants(clang: str, binary_name: str) -> list[list[str]]:
@@ -856,9 +897,45 @@ def compile_command_variants(clang: str, binary_name: str) -> list[list[str]]:
     ]
 
 
+def resolve_wsl_path(path: Path, timeout: int = 10) -> tuple[str, str]:
+    command = ["wsl", "wslpath", "-a", str(path)]
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = (exc.stdout or "") + (exc.stderr or "")
+        return "", output + f"\nwslpath timed out after {timeout} seconds\n"
+    except OSError as exc:
+        return "", f"failed to run wslpath: {exc}\n"
+    output = completed.stdout or ""
+    if completed.returncode != 0:
+        return "", output + f"\nwslpath failed with returncode {completed.returncode}\n"
+    wsl_path = output.strip()
+    if not wsl_path:
+        return "", "wslpath returned an empty path\n"
+    return wsl_path, ""
+
+
+def wsl_shell_command(wsl_cwd: str, inner_command: list[str]) -> list[str]:
+    shell_command = "cd " + shlex.quote(wsl_cwd) + " && " + shell_join(inner_command)
+    return ["wsl", "sh", "-lc", shell_command]
+
+
+def shell_join(command: list[str]) -> str:
+    return " ".join(shlex.quote(str(part)) for part in command)
+
+
 def run_harness(output_dir: Path, args: argparse.Namespace) -> RunResult:
     seconds = max(1, int(args.run_seconds))
-    binary_name = "fuzzer.exe" if os.name == "nt" else "fuzzer"
+    if clang_mode(args) == "wsl":
+        return run_harness_wsl(output_dir, args, seconds)
+    binary_name = native_binary_name()
     binary_path = output_dir / binary_name
     binary_cmd = f".\\{binary_name}" if os.name == "nt" else f"./{binary_name}"
     log_path = output_dir / "run.log"
@@ -883,6 +960,53 @@ def run_harness(output_dir: Path, args: argparse.Namespace) -> RunResult:
             stderr=subprocess.STDOUT,
             timeout=seconds + 5,
             env=env,
+            check=False,
+        )
+        output = completed.stdout or ""
+        write_run_log(log_path, command, completed.returncode, output, seconds, False)
+        return RunResult(command, completed.returncode, output, log_path, seconds)
+    except subprocess.TimeoutExpired as exc:
+        output = (exc.stdout or "") + (exc.stderr or "")
+        output += f"\nfuzzer run timed out after {seconds + 5} seconds\n"
+        write_run_log(log_path, command, 124, output, seconds, True)
+        return RunResult(command, 124, output, log_path, seconds, timed_out=True)
+    except OSError as exc:
+        output = f"failed to start fuzzer: {exc}\n"
+        write_run_log(log_path, command, 127, output, seconds, False)
+        return RunResult(command, 127, output, log_path, seconds)
+
+
+def run_harness_wsl(output_dir: Path, args: argparse.Namespace, seconds: int) -> RunResult:
+    binary_name = "fuzzer"
+    binary_path = output_dir / binary_name
+    log_path = output_dir / "run.log"
+    inner_command = ["env", "ASAN_OPTIONS=detect_leaks=0", f"./{binary_name}", f"-max_total_time={seconds}", "-max_len=4096"]
+    seed_dir = output_dir / "seed_corpus"
+    if seed_dir.exists():
+        inner_command.append("seed_corpus")
+    if not binary_path.exists():
+        command = wsl_shell_command("<task-dir>", inner_command)
+        output = f"fuzzer binary not found: {binary_name}\n"
+        write_run_log(log_path, command, 127, output, seconds, False)
+        return RunResult(command, 127, output, log_path, seconds)
+    if shutil.which("wsl") is None:
+        command = wsl_shell_command("<task-dir>", inner_command)
+        output = "WSL executable not found. Use clang mode native, or install and enable WSL.\n"
+        write_run_log(log_path, command, 127, output, seconds, False)
+        return RunResult(command, 127, output, log_path, seconds)
+    wsl_dir, error = resolve_wsl_path(output_dir, min(10, seconds + 5))
+    if error:
+        command = ["wsl", "wslpath", "-a", str(output_dir)]
+        write_run_log(log_path, command, 127, error, seconds, False)
+        return RunResult(command, 127, error, log_path, seconds)
+    command = wsl_shell_command(wsl_dir, inner_command)
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=seconds + 5,
             check=False,
         )
         output = completed.stdout or ""

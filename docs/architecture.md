@@ -3,7 +3,7 @@
 AxF 当前只保留一条清晰的本地流水线：
 
 ```text
-Web 控制台 / Terminal CLI -> 任务调度 -> kRepo 知识抽取或复用 -> Harness 生成 Agent -> 编译修复 -> 10 秒试跑 -> workspace 产物
+Web 控制台 / Terminal CLI -> 任务调度 -> kRepo 知识抽取或复用 -> Harness 生成 Agent -> native/WSL 编译修复 -> 10 秒试跑 -> workspace 产物
 ```
 
 ## 分层

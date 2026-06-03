@@ -287,6 +287,13 @@ def config_from_args(args: argparse.Namespace, *, input_func=input, output: Text
     config["model_timeout"] = prompt_int("模型超时秒数", args.model_timeout or config["model_timeout"], input_func, stream)
     config["model_max_retries"] = prompt_int("模型重试次数", args.model_max_retries or config["model_max_retries"], input_func, stream)
     config["clang"] = prompt_text("Clang 路径", str(args.clang or config["clang"]), input_func, stream)
+    config["clang_mode"] = prompt_choice(
+        "Clang 模式",
+        str(args.clang_mode or config["clang_mode"]),
+        ["native", "wsl"],
+        input_func,
+        stream,
+    )
     config["max_repair_rounds"] = prompt_int("最大修复轮数", args.max_repair_rounds or config["max_repair_rounds"], input_func, stream)
     config["compile_timeout"] = prompt_int("编译超时秒数", args.compile_timeout or config["compile_timeout"], input_func, stream)
     config["max_deps"] = prompt_int("依赖上限", args.max_deps or config["max_deps"], input_func, stream)
@@ -312,6 +319,7 @@ def apply_args_to_config(config: dict[str, Any], args: argparse.Namespace) -> No
         "model_timeout": args.model_timeout,
         "model_max_retries": args.model_max_retries,
         "clang": args.clang,
+        "clang_mode": args.clang_mode,
         "max_repair_rounds": args.max_repair_rounds,
         "compile_timeout": args.compile_timeout,
         "max_deps": args.max_deps,
@@ -344,6 +352,16 @@ def prompt_int(label: str, default: int, input_func: Any, output: TextIO) -> int
             return int(value)
         except ValueError:
             print(f"{label} 必须是整数。", file=output)
+
+
+def prompt_choice(label: str, default: str, choices: list[str], input_func: Any, output: TextIO) -> str:
+    valid = set(choices)
+    while True:
+        value = input_func(f"{label} [{default}]: ").strip()
+        result = value if value else default
+        if result in valid:
+            return result
+        print(f"{label} 必须是以下值之一：{', '.join(choices)}。", file=output)
 
 
 def prompt_artifacts(value: str | None, default: list[str], input_func: Any, output: TextIO) -> list[str]:
@@ -390,6 +408,7 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model-timeout", type=int)
     parser.add_argument("--model-max-retries", type=int)
     parser.add_argument("--clang")
+    parser.add_argument("--clang-mode", choices=["native", "wsl"])
     parser.add_argument("--max-repair-rounds", type=int)
     parser.add_argument("--compile-timeout", type=int)
     parser.add_argument("--max-deps", type=int)

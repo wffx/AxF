@@ -81,9 +81,12 @@ python -m agents.harness_generation.agent \
 --max-retries 2
 --no-stream
 --clang PATH
+--clang-mode native|wsl
 --max-repair-rounds 3
 --compile-timeout 60
 --skip-compile
 --run-seconds 10
 --skip-run
 ```
+
+`--clang-mode native` 是默认值，在当前系统直接运行 clang。Windows 端如果前端和任务目录在 Windows、clang 在 WSL 中，使用 `--clang-mode wsl --clang /usr/bin/clang`；Agent 会通过 `wsl wslpath` 转换任务目录，并在 WSL 内生成 Linux 二进制 `fuzzer`。

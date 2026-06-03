@@ -118,6 +118,7 @@ function applyDefaults(defaults) {
   setField("model_timeout", defaults.model_timeout);
   setField("model_max_retries", defaults.model_max_retries);
   setField("clang", defaults.clang);
+  setField("clang_mode", defaults.clang_mode);
   setField("max_repair_rounds", defaults.max_repair_rounds);
   setField("compile_timeout", defaults.compile_timeout);
   setField("max_deps", defaults.max_deps);

@@ -123,12 +123,21 @@ harness/
 --model-timeout SECONDS
 --model-max-retries N
 --clang PATH
+--clang-mode native|wsl
 --max-repair-rounds N
 --compile-timeout SECONDS
 --workspace PATH
 --non-interactive
 --async
 ```
+
+Windows 端如果使用 WSL 内的 clang，可以加：
+
+```powershell
+--clang-mode wsl --clang /usr/bin/clang
+```
+
+此时 Terminal 仍在 Windows 上运行，任务目录和 `BROWSE.VC.DB` 使用 Windows 路径；Harness 编译和试跑会通过 WSL 执行。
 
 ## 输出目录
 

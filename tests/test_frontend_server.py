@@ -92,6 +92,7 @@ class FrontendServerTest(unittest.TestCase):
                 "api_key_env": "API_KEY",
                 "model_max_retries": 2,
                 "clang": "/opt/llvm/bin/clang",
+                "clang_mode": "wsl",
                 "max_repair_rounds": 5,
                 "compile_timeout": 30,
             },
@@ -110,6 +111,7 @@ class FrontendServerTest(unittest.TestCase):
         self.assertIn("--timeout 300", command_text)
         self.assertIn("--max-retries 2", command_text)
         self.assertIn("--clang /opt/llvm/bin/clang", command_text)
+        self.assertIn("--clang-mode wsl", command_text)
         self.assertIn("--max-repair-rounds 5", command_text)
         self.assertIn("--compile-timeout 30", command_text)
         self.assertIn("--report-json /tmp/axf-task/report.json", command_text)

@@ -58,6 +58,8 @@ Windows PowerShell 同样可以运行：
 python -m frontend.server --host 127.0.0.1 --port 8787 --open
 ```
 
+本项目当前按 Windows 端优先适配：建议在 Windows 上启动前端或 Terminal，让 `BROWSE.VC.DB` 使用 Windows 本地路径。若 clang 安装在 WSL 中，前端里把 `Clang 模式` 设为 `wsl`，`Clang 路径` 填 WSL 内路径，例如 `/usr/bin/clang`。AxF 会通过 `wsl wslpath` 把 Windows 任务目录转换成 WSL 路径后编译。
+
 页面中填入源码根目录、函数名、文件过滤，勾选 `生成 Fuzz Harness` 后新建任务。`复用知识库目录` 可以填写以前任务的目录，例如 `workspace/web/tasks/<old_task_id>`；系统只会复用本次勾选的知识产物，未勾选项不会生成、不会复用，也不会进入 Harness prompt。产物写入：
 
 ```text
@@ -80,6 +82,20 @@ python -m frontend.terminal run \
   --file net/can/af_can.c \
   --artifacts report_json,subsource,params,harness_generation_agent \
   --model glm-5.1
+```
+
+Windows 上使用 WSL clang 的脚本化示例：
+
+```powershell
+python -m frontend.terminal run `
+  --non-interactive `
+  --repo C:\Users\yufei\linux-7.0 `
+  --function can_send `
+  --file net/can/af_can.c `
+  --artifacts report_json,params,harness_generation_agent `
+  --model glm-5.1 `
+  --clang-mode wsl `
+  --clang /usr/bin/clang
 ```
 
 如果已经有之前任务抽取出的知识产物，可以指定目录复用，避免重复跑 kRepo：

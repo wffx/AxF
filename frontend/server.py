@@ -345,6 +345,7 @@ def build_steps(config: dict[str, Any], task_dir: Path) -> list[PipelineStep]:
         _add_optional(command, "--timeout", config.get("model_timeout") or DEFAULT_MODEL_TIMEOUT)
         _add_optional(command, "--max-retries", config.get("model_max_retries") or DEFAULT_MODEL_MAX_RETRIES)
         _add_optional(command, "--clang", config.get("clang"))
+        _add_optional(command, "--clang-mode", config.get("clang_mode") or "native")
         _add_optional(command, "--max-repair-rounds", config.get("max_repair_rounds"))
         _add_optional(command, "--compile-timeout", config.get("compile_timeout"))
         steps.append(
@@ -373,6 +374,7 @@ def default_config() -> dict[str, Any]:
         "model_timeout": DEFAULT_MODEL_TIMEOUT,
         "model_max_retries": DEFAULT_MODEL_MAX_RETRIES,
         "clang": "",
+        "clang_mode": "native",
         "max_repair_rounds": 3,
         "compile_timeout": 60,
         "max_deps": 50,

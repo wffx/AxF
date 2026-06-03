@@ -16,6 +16,7 @@ from agents.harness_generation.agent import (
     build_prompt,
     build_repair_prompt,
     compile_and_repair,
+    compile_commands_for_mode,
     compile_harness,
     compile_skip_reason,
     html_response_error,
@@ -24,9 +25,11 @@ from agents.harness_generation.agent import (
     parse_model_json,
     read_streaming_chat_response,
     request_harness_json,
+    resolve_clang,
     run_harness,
     update_spec_compile,
     update_spec_run,
+    wsl_shell_command,
 )
 
 
@@ -373,6 +376,36 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertIn("variant 1/3", result.output)
         self.assertIn("variant 2/3", result.output)
         self.assertIn("missing runtime", result.output)
+
+    def test_wsl_compile_mode_uses_linux_binary_and_wsl_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log_path = root / "compile.log"
+            args = argparse.Namespace(clang="/usr/bin/clang", clang_mode="wsl", compile_timeout=5)
+
+            with mock.patch("agents.harness_generation.agent.shutil.which", return_value="/Windows/System32/wsl.exe"):
+                with mock.patch("agents.harness_generation.agent.resolve_wsl_path", return_value=("/mnt/c/AxF/task", "")):
+                    commands = compile_commands_for_mode(root, "/usr/bin/clang", "fuzzer", "wsl", log_path, 1, args)
+
+        self.assertIsInstance(commands, list)
+        command = commands[0]
+        command_text = " ".join(command)
+        self.assertEqual(command[:3], ["wsl", "sh", "-lc"])
+        self.assertIn("cd /mnt/c/AxF/task", command_text)
+        self.assertIn("/usr/bin/clang", command_text)
+        self.assertIn("-o fuzzer", command_text)
+        self.assertNotIn("fuzzer.exe", command_text)
+
+    def test_wsl_mode_defaults_to_usr_bin_clang(self) -> None:
+        args = argparse.Namespace(clang="", clang_mode="wsl")
+
+        self.assertEqual(resolve_clang(args), "/usr/bin/clang")
+
+    def test_wsl_shell_command_quotes_windows_task_paths(self) -> None:
+        command = wsl_shell_command("/mnt/c/Users/yufei/Documents/llm fuzzing/AxF/task", ["/usr/bin/clang", "harness.c"])
+
+        self.assertEqual(command[:3], ["wsl", "sh", "-lc"])
+        self.assertIn("'/mnt/c/Users/yufei/Documents/llm fuzzing/AxF/task'", command[3])
 
     def test_compile_skip_reason_for_missing_harness_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

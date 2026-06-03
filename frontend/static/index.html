@@ -75,7 +75,14 @@
             </label>
             <label>
               Clang 路径
-              <input name="clang" placeholder="留空使用 CLANG 或 clang" />
+              <input name="clang" placeholder="native 留空用 CLANG/clang；wsl 可填 /usr/bin/clang" />
+            </label>
+            <label>
+              Clang 模式
+              <select name="clang_mode">
+                <option value="native">native：当前系统 clang</option>
+                <option value="wsl">wsl：Windows 调用 WSL clang</option>
+              </select>
             </label>
             <label>
               最大修复轮数
