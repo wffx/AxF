@@ -229,8 +229,8 @@ class HarnessGenerationAgentTest(unittest.TestCase):
             args = argparse.Namespace(
                 repo=".",
                 llm_mode="opencode",
-                opencode_tool="nga",
-                opencode_executable="nga",
+                opencode_tool="opencode",
+                opencode_executable="opencode",
                 opencode_model="",
                 model="",
                 timeout=300,
@@ -244,7 +244,7 @@ class HarnessGenerationAgentTest(unittest.TestCase):
             )
 
             with (
-                mock.patch("agents.harness_generation.agent.shutil.which", return_value="nga"),
+                mock.patch("agents.harness_generation.agent.shutil.which", return_value="opencode"),
                 mock.patch("agents.harness_generation.agent.subprocess.run", return_value=completed),
             ):
                 payload = request_harness_json(
@@ -259,6 +259,107 @@ class HarnessGenerationAgentTest(unittest.TestCase):
 
         self.assertEqual(payload["classification"], "needs_manual_fixture")
         self.assertFalse(exists)
+
+    def test_request_harness_json_record_only_harness_records_all_nga_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "llm_transcript.md"
+            args = argparse.Namespace(
+                repo=".",
+                llm_mode="opencode",
+                opencode_tool="nga",
+                opencode_executable="nga",
+                opencode_model="",
+                model="",
+                timeout=300,
+                max_retries=0,
+            )
+            completed = subprocess.CompletedProcess(
+                ["nga"],
+                0,
+                stdout='{"classification":"needs_manual_fixture","files":[]}',
+                stderr="nga diagnostic line",
+            )
+
+            with (
+                mock.patch("agents.harness_generation.agent.shutil.which", return_value="nga"),
+                mock.patch("agents.harness_generation.agent.subprocess.run", return_value=completed),
+            ):
+                payload = request_harness_json(
+                    prompt="生成 harness",
+                    args=args,
+                    transcript_path=transcript,
+                    interaction="initial generation",
+                    record_only_harness=True,
+                )
+
+            text = transcript.read_text(encoding="utf-8")
+            interaction_dir = Path(tmp) / "nga_interactions" / "01_initial_generation"
+            stdout_text = (interaction_dir / "stdout.rawoutput").read_text(encoding="utf-8")
+            stderr_text = (interaction_dir / "stderr.rawoutput").read_text(encoding="utf-8")
+            combined_text = (interaction_dir / "combined.rawoutput").read_text(encoding="utf-8")
+            prompt_text = (interaction_dir / "prompt.md").read_text(encoding="utf-8")
+            metadata = json.loads((interaction_dir / "metadata.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["classification"], "needs_manual_fixture")
+        self.assertIn("initial generation", text)
+        self.assertIn("needs_manual_fixture", text)
+        self.assertIn("nga diagnostic line", text)
+        self.assertIn("needs_manual_fixture", stdout_text)
+        self.assertEqual(stderr_text, "nga diagnostic line")
+        self.assertIn("nga diagnostic line", combined_text)
+        self.assertEqual(prompt_text, "生成 harness")
+        self.assertEqual(metadata["returncode"], 0)
+        self.assertEqual(metadata["command"][:3], ["nga", "run", "--dir"])
+
+    def test_request_harness_json_record_only_harness_records_nga_cli_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "llm_transcript.md"
+            args = argparse.Namespace(
+                repo=".",
+                llm_mode="opencode",
+                opencode_tool="nga",
+                opencode_executable="nga",
+                opencode_model="",
+                model="",
+                timeout=300,
+                max_retries=0,
+            )
+            completed = subprocess.CompletedProcess(
+                ["nga"],
+                1,
+                stdout="partial stdout",
+                stderr="permission requested",
+            )
+
+            with (
+                mock.patch("agents.harness_generation.agent.shutil.which", return_value="nga"),
+                mock.patch("agents.harness_generation.agent.subprocess.run", return_value=completed),
+            ):
+                with self.assertRaisesRegex(HarnessGenerationError, "nga CLI 退出码"):
+                    request_harness_json(
+                        prompt="生成 harness",
+                        args=args,
+                        transcript_path=transcript,
+                        interaction="initial generation",
+                        record_only_harness=True,
+                    )
+
+            text = transcript.read_text(encoding="utf-8")
+            interaction_dir = Path(tmp) / "nga_interactions" / "01_initial_generation"
+            stdout_text = (interaction_dir / "stdout.rawoutput").read_text(encoding="utf-8")
+            stderr_text = (interaction_dir / "stderr.rawoutput").read_text(encoding="utf-8")
+            combined_text = (interaction_dir / "combined.rawoutput").read_text(encoding="utf-8")
+            metadata = json.loads((interaction_dir / "metadata.json").read_text(encoding="utf-8"))
+
+        self.assertIn("partial stdout", text)
+        self.assertIn("permission requested", text)
+        self.assertIn("nga CLI 退出码：1", text)
+        self.assertEqual(stdout_text, "partial stdout")
+        self.assertEqual(stderr_text, "permission requested")
+        self.assertIn("partial stdout", combined_text)
+        self.assertIn("permission requested", combined_text)
+        self.assertEqual(metadata["returncode"], 1)
+        self.assertEqual(metadata["error"], "nga CLI 退出码：1")
 
     def test_request_harness_json_uses_isolated_workspace_for_opencode_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -306,6 +407,52 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertIn("context/prompt.md", command[-1])
         self.assertEqual(prompt_file_text, prompt)
         self.assertEqual(request_file_text, prompt)
+
+    def test_request_harness_json_uses_strict_cli_json_retry_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "llm_transcript.md"
+            args = argparse.Namespace(
+                repo=".",
+                llm_mode="opencode",
+                opencode_tool="nga",
+                opencode_executable="nga",
+                opencode_model="",
+                model="",
+                timeout=300,
+                max_retries=1,
+            )
+            malformed = subprocess.CompletedProcess(
+                ["nga"],
+                0,
+                stdout="model: minimax\n```json\nnot-json\n```\nbuild info",
+                stderr="",
+            )
+            repaired = subprocess.CompletedProcess(
+                ["nga"],
+                0,
+                stdout='{"classification":"byte_parser","files":[]}',
+                stderr="",
+            )
+
+            with (
+                mock.patch("agents.harness_generation.agent.shutil.which", return_value="nga"),
+                mock.patch("agents.harness_generation.agent.subprocess.run", side_effect=[malformed, repaired]),
+            ):
+                payload = request_harness_json(
+                    prompt="生成 harness",
+                    args=args,
+                    transcript_path=transcript,
+                    interaction="initial generation",
+                )
+
+            retry_prompt = (Path(tmp) / "opencode_workspace" / "context" / "prompt_request_2.md").read_text(encoding="utf-8")
+
+        self.assertEqual(payload["classification"], "byte_parser")
+        self.assertIn("上一轮 nga 输出不是合法 JSON，解析错误：", retry_prompt)
+        self.assertIn("请重新输出一个且仅一个完整 JSON 对象", retry_prompt)
+        self.assertIn("必须以 { 开头并以 } 结尾", retry_prompt)
+        self.assertIn("可被 Python json.loads 直接解析", retry_prompt)
+        self.assertIn("不要输出 Markdown、代码块、注释、解释、日志或任何 JSON 之外的字符", retry_prompt)
 
     def test_parse_model_json_repairs_raw_newlines_inside_strings(self) -> None:
         content = '''```json

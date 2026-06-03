@@ -195,6 +195,14 @@ python .\knowledge_base\src\cpp_meta_query.py subsource parse_config --repo .\my
 python .\knowledge_base\src\cpp_meta_query.py calls parse_config --repo .\my_project --file src\config.c --max-depth 3
 ```
 
+`calls` 会优先使用 `rg` 搜索调用点。直接运行知识库 CLI 时不会自动安装 `ripgrep`，Windows 上建议先确认：
+
+```powershell
+rg --version
+```
+
+如果没有 `rg`，调用链搜索会慢很多。Web 和 Terminal 入口会在 Windows 任务开始前自动检查并尝试安装 `ripgrep`；直接调用本脚本时需要用户自己准备环境。
+
 输出示例：
 
 ```text
@@ -393,7 +401,7 @@ python .\knowledge_base\src\cpp_meta_query.py calls parse_config --db .\my_proje
 : `subsource` 最终生成的 `.c` 文件会按符号类别和名称去重，避免多个子函数共享同一个宏、typedef、枚举、变量、结构体或函数时重复输出定义。
 
 `calls` 性能说明
-: 调用链分析会按层批量搜索待查函数名。遇到 `can_send` 这类上游调用链较多的函数时，可用 `--max-depth`、`--max-chains`、`--max-callers-per-level` 控制输出规模。
+: 调用链分析会按层批量搜索待查函数名。遇到 `can_send` 这类上游调用链较多的函数时，可用 `--max-depth`、`--max-chains`、`--max-callers-per-level` 控制输出规模。Windows 上优先确认 `rg` 可用，并把源码目录放在本地 SSD；源码在 OneDrive、网络盘或被杀毒实时扫描时，调用链抽取会明显变慢。
 
 `--no-macros`
 : 完整报告中的直接调用点和下游子函数分析可用该选项跳过大写宏风格调用。
@@ -675,4 +683,3 @@ Candidates: 2 shown / 7 total
 4. 对同名函数，建议使用 `--file` 指定路径子串，避免命中声明、平台实现或测试代码。
 
 如果后续数据库能生成 `symbol_refs` 或 `symbol_relations`，脚本可以扩展为更精确的调用图分析。
-

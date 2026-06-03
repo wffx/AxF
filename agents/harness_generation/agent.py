@@ -535,6 +535,7 @@ def request_harness_json_with_opencode(
     )
     timeout = max(1, int(getattr(args, "timeout", DEFAULT_MODEL_TIMEOUT)))
     max_retries = max(0, int(getattr(args, "max_retries", DEFAULT_LLM_MAX_RETRIES)))
+    transcript_record_only_harness = record_only_harness and tool != "nga"
     messages = [
         {
             "role": "system",
@@ -564,7 +565,16 @@ def request_harness_json_with_opencode(
             )
         except FileNotFoundError as exc:
             error = str(exc)
-            record_llm_transcript(transcript_path, record_only_harness=record_only_harness, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, error=error)
+            save_nga_interaction(
+                transcript_path=transcript_path,
+                attempt_label=attempt_label,
+                request_attempt=request_attempt,
+                model=model or f"{tool}-default",
+                messages=messages,
+                error=error,
+                enabled=tool == "nga",
+            )
+            record_llm_transcript(transcript_path, record_only_harness=transcript_record_only_harness, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, error=error)
             raise HarnessGenerationError(error) from exc
         try:
             completed = subprocess.run(
@@ -577,9 +587,24 @@ def request_harness_json_with_opencode(
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired as exc:
-            raw = (exc.stdout or "") + (exc.stderr or "")
+            stdout = process_text(exc.stdout)
+            stderr = process_text(exc.stderr)
+            raw = "\n".join(part for part in [stdout, stderr] if part).strip()
             error = f"{tool} CLI 超时（{timeout} 秒，第 {request_attempt}/{max_retries + 1} 次）"
-            record_llm_transcript(transcript_path, record_only_harness=record_only_harness, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, assistant=raw, error=error)
+            save_nga_interaction(
+                transcript_path=transcript_path,
+                attempt_label=attempt_label,
+                request_attempt=request_attempt,
+                model=model or f"{tool}-default",
+                messages=messages,
+                command=command,
+                stdout=stdout,
+                stderr=stderr,
+                raw=raw,
+                error=error,
+                enabled=tool == "nga",
+            )
+            record_llm_transcript(transcript_path, record_only_harness=transcript_record_only_harness, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, assistant=raw, error=error)
             if request_attempt <= max_retries:
                 log_llm_retry(error, request_attempt, max_retries)
                 continue
@@ -589,18 +614,45 @@ def request_harness_json_with_opencode(
                 f"{tool} CLI 启动失败：{exc}。"
                 "请检查模型设置中的 CLI executable；Windows 上建议填写完整路径，例如 C:/tools/nga.cmd。"
             )
-            record_llm_transcript(transcript_path, record_only_harness=record_only_harness, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, error=error)
+            save_nga_interaction(
+                transcript_path=transcript_path,
+                attempt_label=attempt_label,
+                request_attempt=request_attempt,
+                model=model or f"{tool}-default",
+                messages=messages,
+                command=command,
+                error=error,
+                enabled=tool == "nga",
+            )
+            record_llm_transcript(transcript_path, record_only_harness=transcript_record_only_harness, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, error=error)
             raise HarnessGenerationError(error) from exc
 
-        raw = "\n".join(part for part in [completed.stdout, completed.stderr] if part).strip()
+        stdout = completed.stdout or ""
+        stderr = completed.stderr or ""
+        raw = "\n".join(part for part in [stdout, stderr] if part).strip()
+        error_text = "" if completed.returncode == 0 else f"{tool} CLI 退出码：{completed.returncode}"
+        save_nga_interaction(
+            transcript_path=transcript_path,
+            attempt_label=attempt_label,
+            request_attempt=request_attempt,
+            model=model or f"{tool}-default",
+            messages=messages,
+            command=command,
+            stdout=stdout,
+            stderr=stderr,
+            raw=raw,
+            returncode=completed.returncode,
+            error=error_text,
+            enabled=tool == "nga",
+        )
         record_llm_transcript(
             transcript_path,
-            record_only_harness=record_only_harness,
+            record_only_harness=transcript_record_only_harness,
             interaction=attempt_label,
             model=model or f"{tool}-default",
             messages=messages,
             assistant=raw,
-            error="" if completed.returncode == 0 else f"{tool} CLI 退出码：{completed.returncode}",
+            error=error_text,
         )
         log_llm_interaction("response", attempt_label, transcript_path)
         if completed.returncode != 0:
@@ -613,18 +665,22 @@ def request_harness_json_with_opencode(
             return parse_model_json(raw)
         except json.JSONDecodeError as exc:
             if request_attempt <= max_retries:
-                current_prompt = (
-                    prompt
-                    + f"\n\n上一轮 {tool} 输出不是合法 JSON，解析错误："
-                    + str(exc)
-                    + "\n请重新输出一个完整、可被 json.loads 解析的 JSON 对象，不要输出 Markdown 或解释。"
-                )
+                current_prompt = build_cli_json_retry_prompt(prompt, tool, exc)
                 messages = [messages[0], {"role": "user", "content": current_prompt}]
                 log_llm_retry(f"{tool} 输出不是合法 JSON：{exc}", request_attempt, max_retries)
                 continue
             raise HarnessGenerationError(f"{tool} 没有返回合法 JSON：{exc}") from exc
 
     raise HarnessGenerationError(f"{tool} 未返回结果")
+
+
+def build_cli_json_retry_prompt(original_prompt: str, tool: str, error: Exception) -> str:
+    return (
+        original_prompt
+        + f"\n\n上一轮 {tool} 输出不是合法 JSON，解析错误：{error}。"
+        + "\n请重新输出一个且仅一个完整 JSON 对象，必须以 { 开头并以 } 结尾，可被 Python json.loads 直接解析。"
+        + "\n不要输出 Markdown、代码块、注释、解释、日志或任何 JSON 之外的字符。"
+    )
 
 
 def normalize_ai_cli_tool(tool: str, executable: str = "") -> str:
@@ -708,6 +764,60 @@ def prepare_opencode_workspace(
     (context_dir / f"prompt_request_{request_attempt}.md").write_text(prompt, encoding="utf-8")
     (workspace_dir / "TASK.md").write_text(OPENCODE_WORKSPACE_MESSAGE + "\n", encoding="utf-8")
     return workspace_dir
+
+
+def save_nga_interaction(
+    *,
+    transcript_path: Path | None,
+    attempt_label: str,
+    request_attempt: int,
+    model: str,
+    messages: list[dict[str, str]],
+    command: list[str] | None = None,
+    stdout: str = "",
+    stderr: str = "",
+    raw: str = "",
+    returncode: int | None = None,
+    error: str = "",
+    enabled: bool = False,
+) -> None:
+    if not enabled or transcript_path is None:
+        return
+
+    interaction_dir = transcript_path.parent / "nga_interactions" / interaction_dir_name(request_attempt, attempt_label)
+    interaction_dir.mkdir(parents=True, exist_ok=True)
+    system_message = "\n\n".join(str(message.get("content") or "") for message in messages if message.get("role") == "system")
+    user_message = "\n\n".join(str(message.get("content") or "") for message in messages if message.get("role") == "user")
+    (interaction_dir / "system.md").write_text(system_message, encoding="utf-8")
+    (interaction_dir / "prompt.md").write_text(user_message, encoding="utf-8")
+    (interaction_dir / "stdout.rawoutput").write_text(stdout or "", encoding="utf-8")
+    (interaction_dir / "stderr.rawoutput").write_text(stderr or "", encoding="utf-8")
+    (interaction_dir / "combined.rawoutput").write_text(raw or "\n".join(part for part in [stdout, stderr] if part).strip(), encoding="utf-8")
+    metadata = {
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "interaction": attempt_label,
+        "attempt": request_attempt,
+        "model": model,
+        "command": command or [],
+        "returncode": returncode,
+        "error": error,
+    }
+    (interaction_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def interaction_dir_name(request_attempt: int, attempt_label: str) -> str:
+    safe = "".join(char if char.isalnum() else "_" for char in (attempt_label or "nga")).strip("_").lower()
+    while "__" in safe:
+        safe = safe.replace("__", "_")
+    return f"{request_attempt:02d}_{safe or 'nga'}"
+
+
+def process_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
 
 
 def resolve_cli_executable(tool: str, executable: str = "") -> str:

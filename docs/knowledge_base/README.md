@@ -234,6 +234,27 @@ upper_func -> middle_func -> target_func
 对于调用关系较多的函数，可以通过 `--max-depth`、`--max-chains`、
 `--max-callers-per-level` 控制搜索和输出规模。
 
+#### calls 性能和 Windows 注意事项
+
+`calls` 是当前知识抽取里最容易耗时的步骤。它需要在源码树里搜索调用点，再从数据库和源码片段中还原上层调用链。Linux 内核这类大仓库中，同名函数、宏包装和间接调用很多，搜索空间会快速变大。
+
+实现会优先使用 `rg` 搜索源码。Web 和 Terminal 调度层在 Windows 上会预先检查 `rg`，缺失时尝试通过 Scoop 安装 `ripgrep`；直接调用 `cpp_meta_query.py` 时不会自动安装，请先确认：
+
+```powershell
+rg --version
+```
+
+Windows 上慢很多时，优先按以下顺序处理：
+
+1. 确认 `rg` 在当前 PowerShell 中可用。
+2. 把源码目录和 AxF `workspace/` 放在本地 SSD，不要放 OneDrive、网络盘或同步盘。
+3. 为源码目录和 `workspace/` 配置 Defender 或第三方杀毒排除项。
+4. 使用 `--file` 精确到目标文件，减少同名函数候选。
+5. 降低 `--max-depth`、`--max-chains`、`--max-callers-per-level`。
+6. 在完整 harness 生成链路中，如果不需要调用场景，可以先不勾选 `calls`，只用 `report_json` 和 `params` 验证模型生成质量。
+
+性能优化的目标是缩小搜索空间，而不是把更多原始文本塞进模型上下文。`calls.txt` 是辅助上下文，不是 Harness Agent 的硬依赖。
+
 ### 4. params
 
 `params` 根据函数源码上下文推断入参约束，包括：
@@ -346,4 +367,3 @@ python .\knowledge_base\src\cpp_meta_query.py calls can_send --repo .\linux-7.0 
 更多命令、参数和接口说明见
 [cpp_meta_query API 文档](../api/knowledge_base/cpp_meta_query.md)；实现细节、符号歧义和去重策略见
 [cpp_meta_query API 实现细节](../api/knowledge_base/api_implementation_details.md)。
-

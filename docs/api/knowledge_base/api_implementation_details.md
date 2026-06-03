@@ -274,7 +274,7 @@ function name
 
 处理流程：
 
-1. 使用 `rg` 或文件遍历按函数名搜索 `callee_name(`。
+1. 优先使用 `rg` 按函数名搜索 `callee_name(`；只有系统找不到 `rg` 时才退到 Python 文件遍历。若 `rg` 可用但返回无命中，结果以 `rg` 为准，不再额外全树扫描。
 2. 根据命中行在数据库中查找所在的 enclosing function。
 3. 确认该行在函数源码中确实包含目标调用名。
 4. 按层向上扩展调用者，输出 `upper -> middle -> target` 链路。
@@ -285,6 +285,7 @@ function name
 - 如果多个同名函数存在，调用链可能表示“调用了这个名字”，但无法完全证明调用的是哪一个定义。
 - 对同名函数较多的工程，应结合 `--file`、`--max-depth`、`--max-chains`、
   `--max-callers-per-level` 控制和人工复核。
+- Windows 上应优先保证 `rg --version` 可用；大源码树上缺少 `rg` 会显著拖慢调用链抽取。Web 和 Terminal 调度层会尝试自动安装 ripgrep，直接调用知识库 CLI 时需要用户自行准备。
 
 ## params 的歧义边界
 
