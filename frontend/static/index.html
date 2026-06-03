@@ -13,6 +13,7 @@
         <h1>AxF 控制台</h1>
       </div>
       <div class="actions">
+        <button class="button ghost" id="open-model-settings" type="button">模型设置</button>
         <button class="button ghost" id="refresh" type="button">刷新</button>
         <button class="button primary" form="task-form" type="submit">新建任务</button>
       </div>
@@ -51,27 +52,7 @@
           <section>
             <div class="section-title">
               <h2>LLM 生成</h2>
-              <span>本地环境变量</span>
-            </div>
-            <label>
-              模型
-              <input name="model" placeholder="glm-5.1" />
-            </label>
-            <label>
-              Chat Completions URL
-              <input name="chat_url" placeholder="留空读取 CHAT_COMPLETIONS_URL" />
-            </label>
-            <label>
-              API Key 环境变量名
-              <input name="api_key_env" placeholder="API_KEY" />
-            </label>
-            <label>
-              API Key（临时）
-              <input name="api_key" type="password" autocomplete="off" placeholder="可临时填写；不会写入 task.json" />
-            </label>
-            <div class="inline-action">
-              <button class="button ghost" id="save-api-key" type="button">保存 API Key 到 .env.local</button>
-              <span id="api-key-status" class="inline-status"></span>
+              <span>生成参数</span>
             </div>
             <label>
               模型超时秒数
@@ -193,6 +174,34 @@
         </section>
       </section>
     </main>
+
+    <div class="modal-backdrop" id="model-settings-modal" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="model-settings-title">
+        <form id="model-settings-form" autocomplete="off">
+          <div class="modal-header">
+            <h2 id="model-settings-title">模型设置</h2>
+            <button class="icon-button" id="close-model-settings" type="button" aria-label="关闭">×</button>
+          </div>
+          <label>
+            模型
+            <input name="model" placeholder="glm-5.1" required />
+          </label>
+          <label>
+            Chat Completions URL
+            <input name="chat_url" placeholder="https://your-provider.example/v1/chat/completions" required />
+          </label>
+          <label>
+            API Key
+            <input name="api_key" type="password" autocomplete="off" required />
+          </label>
+          <div class="modal-footer">
+            <span id="model-settings-status" class="inline-status"></span>
+            <button class="button ghost" id="cancel-model-settings" type="button">取消</button>
+            <button class="button primary" id="save-model-settings" type="submit">保存</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <script src="/static/app.js" defer></script>
   </body>

@@ -1,8 +1,13 @@
 const form = document.querySelector("#task-form");
+const modelSettingsForm = document.querySelector("#model-settings-form");
+const modelSettingsModal = document.querySelector("#model-settings-modal");
+const openModelSettingsButton = document.querySelector("#open-model-settings");
+const closeModelSettingsButton = document.querySelector("#close-model-settings");
+const cancelModelSettingsButton = document.querySelector("#cancel-model-settings");
+const saveModelSettingsButton = document.querySelector("#save-model-settings");
+const modelSettingsStatus = document.querySelector("#model-settings-status");
 const refreshButton = document.querySelector("#refresh");
 const cancelButton = document.querySelector("#cancel");
-const saveApiKeyButton = document.querySelector("#save-api-key");
-const apiKeyStatus = document.querySelector("#api-key-status");
 const statusBadge = document.querySelector("#status");
 const taskTitle = document.querySelector("#task-title");
 const eventsView = document.querySelector("#events-view");
@@ -114,10 +119,9 @@ function applyDefaults(defaults) {
   setField("knowledge_dir", defaults.knowledge_dir);
   setField("function", defaults.function);
   setField("file", defaults.file);
-  setField("model", defaults.model);
-  setField("chat_url", defaults.chat_url);
-  setField("api_key_env", defaults.api_key_env);
-  setField("api_key", "");
+  setModelSettingsField("model", defaults.model);
+  setModelSettingsField("chat_url", defaults.chat_url);
+  setModelSettingsField("api_key", "");
   setField("model_timeout", defaults.model_timeout);
   setField("model_max_retries", defaults.model_max_retries);
   setField("clang", defaults.clang);
@@ -137,6 +141,13 @@ function applyDefaults(defaults) {
   syncArtifactNotes();
 }
 
+function setModelSettingsField(name, value) {
+  const input = modelSettingsForm.elements[name];
+  if (input && value !== undefined && value !== null) {
+    input.value = value;
+  }
+}
+
 function readConfig() {
   const data = new FormData(form);
   const config = {};
@@ -149,26 +160,37 @@ function readConfig() {
   return config;
 }
 
-async function saveApiKey() {
-  const apiKey = form.elements.api_key?.value.trim() || "";
-  const apiKeyEnv = form.elements.api_key_env?.value.trim() || "API_KEY";
-  if (!apiKey) {
-    apiKeyStatus.textContent = "请先填写 API Key。";
+function openModelSettings() {
+  modelSettingsStatus.textContent = "";
+  modelSettingsModal.hidden = false;
+  modelSettingsForm.elements.model.focus();
+}
+
+function closeModelSettings() {
+  modelSettingsModal.hidden = true;
+}
+
+async function saveModelSettings(event) {
+  event.preventDefault();
+  const model = modelSettingsForm.elements.model.value.trim();
+  const chatUrl = modelSettingsForm.elements.chat_url.value.trim();
+  const apiKey = modelSettingsForm.elements.api_key.value.trim();
+  if (!model || !chatUrl || !apiKey) {
+    modelSettingsStatus.textContent = "请填写模型、URL 和 API Key。";
     return;
   }
-  saveApiKeyButton.disabled = true;
-  apiKeyStatus.textContent = "正在保存...";
+  saveModelSettingsButton.disabled = true;
+  modelSettingsStatus.textContent = "正在保存...";
   try {
-    const result = await api("/api/settings/api-key", {
+    const result = await api("/api/settings/model", {
       method: "POST",
-      body: JSON.stringify({ api_key: apiKey, api_key_env: apiKeyEnv }),
+      body: JSON.stringify({ model, chat_url: chatUrl, api_key: apiKey }),
     });
-    form.elements.api_key.value = "";
-    apiKeyStatus.textContent = `已保存 ${result.env_name} 到 ${result.env_path}`;
+    modelSettingsStatus.textContent = `已保存到 ${result.env_path}`;
   } catch (error) {
-    apiKeyStatus.textContent = `保存失败: ${error.message}`;
+    modelSettingsStatus.textContent = `保存失败: ${error.message}`;
   } finally {
-    saveApiKeyButton.disabled = false;
+    saveModelSettingsButton.disabled = false;
   }
 }
 
@@ -643,7 +665,15 @@ refreshButton.addEventListener("click", async () => {
   await refreshActiveTask();
 });
 
-saveApiKeyButton.addEventListener("click", saveApiKey);
+openModelSettingsButton.addEventListener("click", openModelSettings);
+closeModelSettingsButton.addEventListener("click", closeModelSettings);
+cancelModelSettingsButton.addEventListener("click", closeModelSettings);
+modelSettingsModal.addEventListener("click", (event) => {
+  if (event.target === modelSettingsModal) {
+    closeModelSettings();
+  }
+});
+modelSettingsForm.addEventListener("submit", saveModelSettings);
 
 for (const tab of document.querySelectorAll(".tab")) {
   tab.addEventListener("click", () => switchTab(tab.dataset.tab));

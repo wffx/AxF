@@ -46,7 +46,7 @@ MODEL=glm-5.1
 
 Agent 会自动补 `/chat/completions`。模型请求默认使用流式 Chat Completions；如果要临时排查非流式兼容性，可以在命令行 Agent 中加 `--no-stream`。
 
-开发调试时，也可以在 Web 前端的 `API Key（临时）` 字段直接填 key。点击 `保存 API Key 到 .env.local` 后，后端会更新仓库根目录的 `.env.local` 并同步到当前前端 server 进程环境变量，下一次任务可直接读取。未点击保存而直接创建任务时，该 key 只注入当前 Harness Agent 子进程，不写入 `task.json`、命令日志或 LLM 交互记录。
+Web 前端顶部的 `模型设置` 按钮会打开配置弹窗，只需要填写模型、Chat Completions URL 和 API Key。保存后会更新仓库根目录的 `.env.local` 并同步到当前前端 server 进程环境变量；密钥不会写入任务配置、命令日志或 LLM 交互记录。
 
 启动前端：
 

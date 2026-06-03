@@ -18,8 +18,7 @@ from frontend.server import (
     _harness_failure_message_for_step,
     _harness_events_for_step,
     _harness_summary,
-    _runtime_env_from_config,
-    save_api_key_to_local_env,
+    save_model_settings_to_local_env,
     _sanitize_task_config,
     _selected_artifacts,
     write_env_value,
@@ -66,35 +65,28 @@ class FrontendServerTest(unittest.TestCase):
         self.assertIn("report_json", defaults["artifacts"])
         self.assertIn("subsource", defaults["artifacts"])
         self.assertIn("harness_generation_agent", defaults["artifacts"])
-        self.assertEqual(defaults["api_key_env"], "API_KEY")
-        self.assertEqual(defaults["api_key"], "")
         self.assertEqual(defaults["model_timeout"], 300)
         self.assertEqual(defaults["model_max_retries"], 2)
 
-    def test_direct_api_key_is_runtime_only(self) -> None:
+    def test_sanitize_task_config_drops_legacy_direct_api_key(self) -> None:
         config = {
             "repo": "./linux-7.0",
             "function": "can_send",
             "artifacts": ["harness_generation_agent"],
-            "api_key_env": "API_KEY",
             "api_key": "sk-secret",
         }
 
         safe = _sanitize_task_config(config)
-        runtime_env = _runtime_env_from_config(config)
 
         self.assertNotIn("api_key", safe)
-        self.assertTrue(safe["api_key_provided"])
-        self.assertEqual(runtime_env, {"API_KEY": "sk-secret"})
 
-    def test_task_store_redacts_direct_api_key(self) -> None:
+    def test_task_store_drops_legacy_direct_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TaskStore(Path(tmp))
             config = {
                 "repo": "./linux-7.0",
                 "function": "can_send",
                 "artifacts": ["report_json"],
-                "api_key_env": "API_KEY",
                 "api_key": "sk-secret",
             }
 
@@ -104,8 +96,6 @@ class FrontendServerTest(unittest.TestCase):
             task_json = task.to_json()
 
         self.assertNotIn("api_key", task_json["config"])
-        self.assertTrue(task_json["config"]["api_key_provided"])
-        self.assertEqual(task.runtime_env, {"API_KEY": "sk-secret"})
 
     def test_write_env_value_updates_or_appends_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -122,16 +112,28 @@ class FrontendServerTest(unittest.TestCase):
         self.assertNotIn("API_KEY=old", text)
         self.assertIn("# comment", text)
 
-    def test_save_api_key_to_local_env_updates_file_and_process_env(self) -> None:
+    def test_save_model_settings_to_local_env_updates_file_and_process_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("frontend.server.PROJECT_ROOT", root), mock.patch.dict(os.environ, {}, clear=True):
-                result = save_api_key_to_local_env({"api_key_env": "API_KEY", "api_key": "sk-secret"})
+                result = save_model_settings_to_local_env(
+                    {
+                        "model": "glm-5.1",
+                        "chat_url": "https://example.invalid/v1/chat/completions",
+                        "api_key": "sk-secret",
+                    }
+                )
                 text = (root / ".env.local").read_text(encoding="utf-8")
+                model_value = os.environ["MODEL"]
+                chat_url_value = os.environ["CHAT_COMPLETIONS_URL"]
                 env_value = os.environ["API_KEY"]
 
-        self.assertEqual(result["env_name"], "API_KEY")
+        self.assertEqual(result["status"], "saved")
+        self.assertIn("MODEL=glm-5.1", text)
+        self.assertIn("CHAT_COMPLETIONS_URL=https://example.invalid/v1/chat/completions", text)
         self.assertIn("API_KEY=sk-secret", text)
+        self.assertEqual(model_value, "glm-5.1")
+        self.assertEqual(chat_url_value, "https://example.invalid/v1/chat/completions")
         self.assertEqual(env_value, "sk-secret")
 
     def test_empty_artifact_selection_does_not_fall_back_to_defaults(self) -> None:

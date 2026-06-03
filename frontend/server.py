@@ -60,7 +60,6 @@ class Task:
     process: subprocess.Popen[str] | None = None
     cancel_requested: bool = False
     error: str | None = None
-    runtime_env: dict[str, str] = field(default_factory=dict, repr=False)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -97,7 +96,6 @@ class TaskStore:
         task_dir = self.workspace / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
         safe_config = _sanitize_task_config(config)
-        runtime_env = _runtime_env_from_config(config)
         try:
             build_steps(safe_config, task_dir)
         except ValueError:
@@ -106,7 +104,7 @@ class TaskStore:
             except OSError:
                 pass
             raise
-        task = Task(id=task_id, config=safe_config, task_dir=task_dir, runtime_env=runtime_env)
+        task = Task(id=task_id, config=safe_config, task_dir=task_dir)
         with self._lock:
             self._tasks[task_id] = task
         threading.Thread(target=self._run_task, args=(task_id,), daemon=True).start()
@@ -264,11 +262,7 @@ class TaskStore:
                 output_handle.close()
 
     def _step_env(self, task_id: str) -> dict[str, str]:
-        env = os.environ.copy()
-        task = self.get(task_id)
-        if task:
-            env.update(task.runtime_env)
-        return env
+        return os.environ.copy()
 
 
 def build_steps(config: dict[str, Any], task_dir: Path) -> list[PipelineStep]:
@@ -384,8 +378,6 @@ def default_config() -> dict[str, Any]:
         "artifacts": ["report_md", "report_json", "subsource", "calls", "params", HARNESS_AGENT_ARTIFACT],
         "model": "glm-5.1",
         "chat_url": "",
-        "api_key_env": "API_KEY",
-        "api_key": "",
         "model_timeout": DEFAULT_MODEL_TIMEOUT,
         "model_max_retries": DEFAULT_MODEL_MAX_RETRIES,
         "clang": "",
@@ -455,9 +447,9 @@ def _handler_factory(store: TaskStore) -> type[BaseHTTPRequestHandler]:
                     return
                 self._send_json(task.to_json(), status=HTTPStatus.CREATED)
                 return
-            if path == "/api/settings/api-key":
+            if path == "/api/settings/model":
                 try:
-                    result = save_api_key_to_local_env(self._read_json())
+                    result = save_model_settings_to_local_env(self._read_json())
                 except ValueError as exc:
                     self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
                     return
@@ -585,25 +577,24 @@ def _reuse_step(name: str, output: Path, source: Path) -> PipelineStep:
     )
 
 
-def _runtime_env_from_config(config: dict[str, Any]) -> dict[str, str]:
-    direct_key = str(config.get("api_key") or "").strip()
-    if not direct_key:
-        return {}
-    env_name = str(config.get("api_key_env") or "API_KEY").strip() or "API_KEY"
-    return {env_name: direct_key}
-
-
-def save_api_key_to_local_env(config: dict[str, Any]) -> dict[str, str]:
+def save_model_settings_to_local_env(config: dict[str, Any]) -> dict[str, str]:
+    model = str(config.get("model") or "").strip()
+    chat_url = str(config.get("chat_url") or "").strip()
     api_key = str(config.get("api_key") or "").strip()
-    env_name = str(config.get("api_key_env") or "API_KEY").strip() or "API_KEY"
+    if not model:
+        raise ValueError("模型不能为空")
+    if not chat_url:
+        raise ValueError("Chat Completions URL 不能为空")
     if not api_key:
         raise ValueError("API Key 不能为空")
-    if not ENV_NAME_RE.match(env_name):
-        raise ValueError("API Key 环境变量名无效")
     env_path = PROJECT_ROOT / ".env.local"
-    write_env_value(env_path, env_name, api_key)
-    os.environ[env_name] = api_key
-    return {"status": "saved", "env_name": env_name, "env_path": str(env_path)}
+    write_env_value(env_path, "MODEL", model)
+    write_env_value(env_path, "CHAT_COMPLETIONS_URL", chat_url)
+    write_env_value(env_path, "API_KEY", api_key)
+    os.environ["MODEL"] = model
+    os.environ["CHAT_COMPLETIONS_URL"] = chat_url
+    os.environ["API_KEY"] = api_key
+    return {"status": "saved", "env_path": str(env_path)}
 
 
 def write_env_value(path: Path, key: str, value: str) -> None:
@@ -642,9 +633,7 @@ def quote_env_value(value: str) -> str:
 
 def _sanitize_task_config(config: dict[str, Any]) -> dict[str, Any]:
     safe = dict(config)
-    direct_key = str(safe.pop("api_key", "") or "").strip()
-    if direct_key:
-        safe["api_key_provided"] = True
+    safe.pop("api_key", None)
     return safe
 
 
