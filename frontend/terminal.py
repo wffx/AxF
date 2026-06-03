@@ -25,6 +25,7 @@ from frontend.server import (
     _step_action_label,
     build_steps,
     default_config,
+    ensure_rg_available,
     load_local_env,
 )
 
@@ -120,6 +121,14 @@ class TerminalTaskRunner:
         task_dir.mkdir(parents=True, exist_ok=True)
         self._write_task_json(task_id, task_dir, config, steps)
         self._event(task_dir, "init", f"任务已开始：{config.get('function')}")
+        try:
+            ensure_rg_available(log=lambda message: self._log(task_dir, message, echo=True))
+        except RuntimeError as exc:
+            error = str(exc)
+            self._event(task_dir, "failed", error)
+            print(f"错误：{error}", file=self.output, flush=True)
+            print(f"产物目录：{task_dir}", file=self.output, flush=True)
+            return 127
 
         try:
             for index, step in enumerate(steps, start=1):

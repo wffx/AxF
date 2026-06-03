@@ -153,6 +153,31 @@ class TerminalTest(unittest.TestCase):
         self.assertIn('"ok": true', copied)
         self.assertIn("正在复用", events)
 
+    def test_runner_stops_when_rg_preflight_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task"
+            output = io.StringIO()
+            runner = TerminalTaskRunner(Path(tmp), output)
+            step = PipelineStep(
+                "fake",
+                [sys.executable, "-c", "print('should not run')"],
+                "fake",
+                task_dir / "fake.txt",
+            )
+
+            with (
+                mock.patch("frontend.terminal.ensure_rg_available", side_effect=RuntimeError("missing rg")),
+                mock.patch("frontend.terminal.subprocess.Popen") as popen,
+            ):
+                returncode = runner.run_steps("task", task_dir, {"function": "fake_fn"}, [step])
+
+            events = (task_dir / "events.jsonl").read_text(encoding="utf-8")
+
+        self.assertEqual(returncode, 127)
+        self.assertEqual(popen.call_count, 0)
+        self.assertIn("missing rg", events)
+        self.assertIn("错误：missing rg", output.getvalue())
+
     def test_async_submit_starts_worker_process(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = io.StringIO()

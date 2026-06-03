@@ -222,6 +222,8 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertEqual(payload["classification"], "byte_parser")
         self.assertIn("--file", command)
         self.assertNotIn(prompt, command)
+        self.assertEqual(command[-2], "--file")
+        self.assertIn("附加的 prompt 文件", command[-3])
         self.assertEqual(prompt_file_text, prompt)
 
     def test_parse_model_json_repairs_raw_newlines_inside_strings(self) -> None:

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
 
@@ -183,6 +183,13 @@ class TaskStore:
             json.dumps({"id": task.id, "config": task.config, "steps": [s.to_json() for s in steps]}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        try:
+            ensure_rg_available(log=lambda message: self._log(task_id, message))
+        except RuntimeError as exc:
+            error = str(exc)
+            self._set(task_id, status="failed", returncode=127, error=error)
+            self._event(task_id, "failed", error)
+            return
 
         for index, step in enumerate(steps, start=1):
             if self.get(task_id) and self.get(task_id).cancel_requested:
@@ -263,6 +270,119 @@ class TaskStore:
 
     def _step_env(self, task_id: str) -> dict[str, str]:
         return os.environ.copy()
+
+
+def ensure_rg_available(log: Callable[[str], None] | None = None) -> None:
+    if sys.platform != "win32":
+        return
+    _prepend_windows_scoop_shims_to_path()
+    if shutil.which("rg"):
+        return
+
+    scoop = shutil.which("scoop")
+    if not scoop:
+        install_scoop(log=log)
+        _prepend_windows_scoop_shims_to_path()
+        scoop = shutil.which("scoop")
+        if not scoop:
+            raise RuntimeError("Scoop 安装完成后当前进程仍找不到 scoop；请重启 AxF 后再试。")
+
+    if log:
+        log("Windows 未检测到 rg，正在通过 Scoop 安装 ripgrep...")
+    try:
+        completed = subprocess.run(
+            [scoop, "install", "ripgrep"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = ((exc.stdout or "") + (exc.stderr or "")).strip()
+        raise RuntimeError(f"Scoop 安装 ripgrep 超时：{_short_process_output(output)}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"Scoop 安装 ripgrep 启动失败：{exc}") from exc
+
+    output = "\n".join(part for part in [completed.stdout, completed.stderr] if part).strip()
+    if completed.returncode != 0:
+        raise RuntimeError(f"Scoop 安装 ripgrep 失败（退出码 {completed.returncode}）：{_short_process_output(output)}")
+
+    _prepend_windows_scoop_shims_to_path()
+    if not shutil.which("rg"):
+        raise RuntimeError("Scoop 已安装 ripgrep，但当前进程仍找不到 rg；请确认 Scoop shims 目录在 PATH 中后重启 AxF。")
+    if log:
+        log("ripgrep 已安装，rg 可用。")
+
+
+def install_scoop(log: Callable[[str], None] | None = None) -> None:
+    powershell = shutil.which("powershell") or shutil.which("powershell.exe") or shutil.which("pwsh") or shutil.which("pwsh.exe")
+    if not powershell:
+        raise RuntimeError("Windows 未检测到 rg，也未找到 Scoop；自动安装 Scoop 失败：找不到 PowerShell。")
+    if log:
+        log("Windows 未检测到 rg，也未检测到 Scoop，正在自动安装 Scoop...")
+    command = [
+        powershell,
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "RemoteSigned",
+        "-Command",
+        "Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression",
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = ((exc.stdout or "") + (exc.stderr or "")).strip()
+        raise RuntimeError(f"Scoop 自动安装超时：{_short_process_output(output)}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"Scoop 自动安装启动失败：{exc}") from exc
+
+    output = "\n".join(part for part in [completed.stdout, completed.stderr] if part).strip()
+    if completed.returncode != 0:
+        raise RuntimeError(f"Scoop 自动安装失败（退出码 {completed.returncode}）：{_short_process_output(output)}")
+    if log:
+        log("Scoop 已安装，准备安装 ripgrep...")
+
+
+def _prepend_windows_scoop_shims_to_path() -> None:
+    candidates: list[Path] = []
+    userprofile = os.environ.get("USERPROFILE")
+    if userprofile:
+        candidates.append(Path(userprofile) / "scoop" / "shims")
+    program_data = os.environ.get("ProgramData")
+    if program_data:
+        candidates.append(Path(program_data) / "scoop" / "shims")
+
+    path_parts = [part for part in os.environ.get("PATH", "").split(os.pathsep) if part]
+    normalized = {os.path.normcase(os.path.abspath(part)) for part in path_parts}
+    prepend: list[str] = []
+    for candidate in candidates:
+        if candidate.is_dir():
+            value = str(candidate)
+            key = os.path.normcase(os.path.abspath(value))
+            if key not in normalized:
+                prepend.append(value)
+                normalized.add(key)
+    if prepend:
+        os.environ["PATH"] = os.pathsep.join([*prepend, *path_parts])
+
+
+def _short_process_output(output: str, limit: int = 1200) -> str:
+    text = output.strip()
+    if not text:
+        return "无输出"
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "...[truncated]"
 
 
 def build_steps(config: dict[str, Any], task_dir: Path) -> list[PipelineStep]:

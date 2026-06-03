@@ -557,8 +557,8 @@ def build_cli_command(
         if model:
             command.extend(["--model", model])
         if prompt_file:
-            command.extend(["--file", str(prompt_file)])
             command.append(OPENCODE_PROMPT_FILE_MESSAGE)
+            command.extend(["--file", str(prompt_file)])
         else:
             command.append(prompt)
         return command

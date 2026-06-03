@@ -18,6 +18,7 @@ from frontend.server import (
     _harness_failure_message_for_step,
     _harness_events_for_step,
     _harness_summary,
+    ensure_rg_available,
     save_model_settings_to_local_env,
     _sanitize_task_config,
     _selected_artifacts,
@@ -175,6 +176,73 @@ class FrontendServerTest(unittest.TestCase):
         self.assertEqual(tool_value, "nga")
         self.assertEqual(executable_value, "nga")
         self.assertEqual(model_value, "anthropic/claude-sonnet-4")
+
+    def test_ensure_rg_available_installs_ripgrep_with_scoop_on_windows(self) -> None:
+        calls = {"rg": 0}
+
+        def fake_which(name: str) -> str | None:
+            if name == "rg":
+                calls["rg"] += 1
+                return "C:/Users/me/scoop/shims/rg.exe" if calls["rg"] > 1 else None
+            if name == "scoop":
+                return "C:/Users/me/scoop/shims/scoop.cmd"
+            return None
+
+        logs: list[str] = []
+        with (
+            mock.patch("frontend.server.sys.platform", "win32"),
+            mock.patch("frontend.server.shutil.which", side_effect=fake_which),
+            mock.patch("frontend.server.subprocess.run") as run,
+        ):
+            run.return_value.returncode = 0
+            run.return_value.stdout = "installed"
+            run.return_value.stderr = ""
+
+            ensure_rg_available(log=logs.append)
+
+        self.assertEqual(run.call_args.args[0], ["C:/Users/me/scoop/shims/scoop.cmd", "install", "ripgrep"])
+        self.assertIn("正在通过 Scoop 安装 ripgrep", "\n".join(logs))
+        self.assertIn("rg 可用", "\n".join(logs))
+
+    def test_ensure_rg_available_installs_scoop_before_ripgrep_on_windows(self) -> None:
+        calls = {"rg": 0, "scoop": 0}
+
+        def fake_which(name: str) -> str | None:
+            if name == "rg":
+                calls["rg"] += 1
+                return "C:/Users/me/scoop/shims/rg.exe" if calls["rg"] > 1 else None
+            if name == "scoop":
+                calls["scoop"] += 1
+                return "C:/Users/me/scoop/shims/scoop.cmd" if calls["scoop"] > 1 else None
+            if name == "powershell":
+                return "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+            return None
+
+        logs: list[str] = []
+        with (
+            mock.patch("frontend.server.sys.platform", "win32"),
+            mock.patch("frontend.server.shutil.which", side_effect=fake_which),
+            mock.patch("frontend.server.subprocess.run") as run,
+        ):
+            run.return_value.returncode = 0
+            run.return_value.stdout = "installed"
+            run.return_value.stderr = ""
+
+            ensure_rg_available(log=logs.append)
+
+        self.assertEqual(len(run.call_args_list), 2)
+        self.assertEqual(run.call_args_list[0].args[0][:4], ["C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", "-NoProfile", "-ExecutionPolicy", "RemoteSigned"])
+        self.assertIn("get.scoop.sh", run.call_args_list[0].args[0][-1])
+        self.assertEqual(run.call_args_list[1].args[0], ["C:/Users/me/scoop/shims/scoop.cmd", "install", "ripgrep"])
+        self.assertIn("自动安装 Scoop", "\n".join(logs))
+
+    def test_ensure_rg_available_requires_powershell_when_bootstrap_missing_on_windows(self) -> None:
+        with (
+            mock.patch("frontend.server.sys.platform", "win32"),
+            mock.patch("frontend.server.shutil.which", return_value=None),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "找不到 PowerShell"):
+                ensure_rg_available()
 
     def test_empty_artifact_selection_does_not_fall_back_to_defaults(self) -> None:
         self.assertEqual(_selected_artifacts({"artifacts": []}), set())
