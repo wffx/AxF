@@ -22,6 +22,7 @@ from agents.harness_generation.agent import (
     compile_commands_for_mode,
     compile_harness,
     compile_skip_reason,
+    ensure_required_harness_payload,
     html_response_error,
     merge_repair_payload,
     normalize_chat_url,
@@ -223,7 +224,7 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertIn("--file", command)
         self.assertNotIn(prompt, command)
         self.assertEqual(command[-2], "--file")
-        self.assertIn("附加的 prompt 文件", command[-3])
+        self.assertIn("完整 harness 生成任务", command[-3])
         self.assertEqual(prompt_file_text, prompt)
 
     def test_parse_model_json_repairs_raw_newlines_inside_strings(self) -> None:
@@ -482,8 +483,84 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertNotIn("--- report.json ---", prompt)
         self.assertNotIn("--- subsource bundle ---", prompt)
         self.assertIn("未选择额外 kRepo 知识产物", prompt)
+        self.assertIn("不是错误", prompt)
+        self.assertIn("不是必须存在的外部知识库路径", prompt)
+        self.assertIn("不要回答", prompt)
+        self.assertIn("目标函数信息已经在上方给出", prompt)
+        self.assertIn("需要以下信息：目标函数信息", prompt)
         self.assertIn("不要仅因缺少上下文而标记 unsupported", prompt)
         self.assertNotIn("信息不足时标记 unsupported", prompt)
+
+    def test_missing_harness_payload_retries_context_refusal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "llm_transcript.md"
+            args = argparse.Namespace()
+            first = {
+                "classification": "unsupported",
+                "unsupported_reason": "没有找到 kRepo/AxF 知识产物和 harness 生成规则知识库路径",
+                "files": [],
+            }
+            second = {
+                "classification": "byte_parser",
+                "files": [{"path": "harness.c", "content": "int LLVMFuzzerTestOneInput(const unsigned char *d, unsigned long s){return 0;}"}],
+            }
+
+            with mock.patch("agents.harness_generation.agent.request_harness_json", return_value=second) as request:
+                payload = ensure_required_harness_payload(
+                    payload=first,
+                    prompt="生成 harness",
+                    args=args,
+                    transcript_path=transcript,
+                )
+
+            retry_prompt = request.call_args.kwargs["prompt"]
+
+        self.assertEqual(payload, second)
+        self.assertIn("缺少 kRepo/AxF 知识产物", retry_prompt)
+        self.assertIn("必须包含 harness.c", retry_prompt)
+
+    def test_missing_harness_payload_retries_target_info_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "llm_transcript.md"
+            first = {
+                "classification": "needs_manual_fixture",
+                "unsupported_reason": "需要以下信息：目标函数信息、AxF/kRepo知识产物",
+                "files": [],
+            }
+            second = {
+                "classification": "byte_parser",
+                "files": [{"path": "harness.c", "content": "int LLVMFuzzerTestOneInput(const unsigned char *d, unsigned long s){return 0;}"}],
+            }
+
+            with mock.patch("agents.harness_generation.agent.request_harness_json", return_value=second) as request:
+                payload = ensure_required_harness_payload(
+                    payload=first,
+                    prompt="生成 harness",
+                    args=argparse.Namespace(),
+                    transcript_path=transcript,
+                )
+
+            retry_prompt = request.call_args.kwargs["prompt"]
+
+        self.assertEqual(payload, second)
+        self.assertIn("缺少目标函数信息", retry_prompt)
+        self.assertIn("目标函数信息已经给出", retry_prompt)
+
+    def test_missing_harness_payload_allows_real_unsupported_reason(self) -> None:
+        payload = {
+            "classification": "unsupported",
+            "unsupported_reason": "requires real hardware DMA engine and unmockable interrupt timing",
+            "files": [],
+        }
+
+        result = ensure_required_harness_payload(
+            payload=payload,
+            prompt="生成 harness",
+            args=argparse.Namespace(),
+            transcript_path=Path("/tmp/llm_transcript.md"),
+        )
+
+        self.assertIs(result, payload)
 
     def test_build_context_uses_only_explicit_krepo_prompt_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

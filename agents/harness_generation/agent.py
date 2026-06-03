@@ -40,7 +40,9 @@ DEFAULT_MODEL_TIMEOUT = 300
 DEFAULT_LLM_MAX_RETRIES = 2
 MAX_DIRECT_CLI_PROMPT_CHARS = 8_000
 OPENCODE_PROMPT_FILE_MESSAGE = (
-    "请读取本次命令通过 --file 附加的 prompt 文件，并严格按照文件中的要求完成任务。"
+    "完整 harness 生成任务已经作为 --file 文件附加到本条消息。请直接按附加文件里的目标函数和内联上下文生成结果。"
+    "目标函数信息已经在附加文件中给出；不要要求用户提供目标函数信息、kRepo/AxF 知识库路径或规则库路径。"
+    "缺少额外知识产物也必须先生成保守 harness。"
     "只输出一个可被 json.loads 解析的 JSON 对象，不要输出 Markdown 或解释。"
 )
 
@@ -146,6 +148,12 @@ def generate_harness(args: argparse.Namespace) -> dict[str, str]:
         transcript_path=transcript_path,
         interaction="initial generation",
     )
+    payload = ensure_required_harness_payload(
+        payload=payload,
+        prompt=prompt,
+        args=args,
+        transcript_path=transcript_path,
+    )
 
     (output_dir / "llm_response.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
@@ -184,7 +192,7 @@ def read_optional_context(value: str, limit: int) -> str:
 def build_prompt(context: dict[str, str]) -> str:
     target = f"{context['file']}::{context['function']}" if context["file"] else context["function"]
     context_sections = build_prompt_context_sections(context)
-    return f"""你是 AxF 的 Harness 生成 Agent。请基于目标函数信息和用户选择加入 prompt 的 kRepo/AxF 知识产物，生成用户态 libFuzzer 驱动。
+    return f"""你是 AxF 的 Harness 生成 Agent。请基于本 prompt 已经内联提供的目标函数信息和可选上下文，生成用户态 libFuzzer 驱动。
 
 目标函数：{target}
 源码根目录：{context['repo']}
@@ -192,14 +200,16 @@ def build_prompt(context: dict[str, str]) -> str:
 要求：
 1. 统一入口必须是 int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)。
 2. 生成最小可读的用户态 C 代码，优先用 Data/Size 构造 buffer、长度、flags、枚举、地址结构、sk_buff 形态输入。
-3. 即使没有额外 kRepo 知识产物，也要先尝试生成可编译 harness；不要因为上下文不足直接返回 unsupported。只有目标必须依赖不可模拟的真实硬件、真实内核并发语义或无法近似的函数指针分派时，才给出 unsupported 或 needs_manual_fixture。
-4. 只能生成文件内容，不要修改 Linux 源码。
-5. 生成代码会被本地 clang 立即编译验证；请尽量让 harness.c 和 mocks.c 可以仅依赖生成文件完成用户态编译。
-6. 生成目录内必须包含目标函数 {context['function']} 的可链接定义。不能只写函数声明；如果 prompt 中提供了 subsource bundle，优先基于它写用户态适配实现；如果缺少源码上下文，请基于目标标识和通用 C/libFuzzer 经验写一个保守的用户态适配实现，并在 diagnostics/mock_rationale 中说明上下文受限。
-7. 不要通过空实现目标函数、跳过目标调用、只调用 mock 函数来伪造编译成功。
-8. dict.txt 只能包含短小 ASCII libFuzzer 字典项，最多 20 行；不要输出长二进制 blob，不要重复输出大量 \\x00。seed_hints 也必须短小。
-9. 同时给出 Unix build.sh 和 Windows build.ps1。编译命令以 clang 和 libFuzzer sanitizer 为默认假设即可。
-10. 输出必须是一个 JSON 对象，不要输出 Markdown。JSON schema：
+3. 目标函数信息已经在上方给出。本 prompt 中的 kRepo/AxF 知识产物只是可选参考，不是必须存在的外部知识库路径。不要回答“需要以下信息：目标函数信息、AxF/kRepo 知识产物”“没有找到 kRepo/AxF 知识产物”“缺少 harness 生成规则知识库路径”或要求用户补充路径；本 prompt 就是全部输入。
+4. 即使没有额外 kRepo 知识产物，也要先尝试生成可编译 harness；不要因为上下文不足直接返回 unsupported。只有目标必须依赖不可模拟的真实硬件、真实内核并发语义或无法近似的函数指针分派时，才给出 unsupported 或 needs_manual_fixture。
+5. 只能生成文件内容，不要修改 Linux 源码。
+6. 生成代码会被本地 clang 立即编译验证；请尽量让 harness.c 和 mocks.c 可以仅依赖生成文件完成用户态编译。
+7. 生成目录内必须包含目标函数 {context['function']} 的可链接定义。不能只写函数声明；如果 prompt 中提供了 subsource bundle，优先基于它写用户态适配实现；如果缺少源码上下文，请基于目标标识和通用 C/libFuzzer 经验写一个保守的用户态适配实现，并在 diagnostics/mock_rationale 中说明上下文受限。
+8. 不要通过空实现目标函数、跳过目标调用、只调用 mock 函数来伪造编译成功。
+9. dict.txt 只能包含短小 ASCII libFuzzer 字典项，最多 20 行；不要输出长二进制 blob，不要重复输出大量 \\x00。seed_hints 也必须短小。
+10. 同时给出 Unix build.sh 和 Windows build.ps1。编译命令以 clang 和 libFuzzer sanitizer 为默认假设即可。
+11. 除非 classification 是 unsupported 或 needs_manual_fixture 且原因不是“缺少上下文/知识产物”，files 必须包含 harness.c、mocks.h、mocks.c、build.sh、build.ps1。
+12. 输出必须是一个 JSON 对象，不要输出 Markdown。JSON schema：
 {{
   "classification": "byte_parser|skb_handler|sock_msg|net_device_state|unsupported|needs_manual_fixture",
   "unsupported_reason": "",
@@ -237,8 +247,104 @@ def build_prompt_context_sections(context: dict[str, str]) -> str:
     if context.get("params"):
         sections.extend(["--- parameter constraints ---", context["params"], ""])
     if not sections:
-        return "未选择额外 kRepo 知识产物。请直接调用 LLM 的通用 C/libFuzzer 能力，基于目标函数标识生成最小可编译 harness。不要仅因缺少上下文而标记 unsupported；如需近似目标函数实现，请在 diagnostics/mock_rationale 中明确说明上下文受限。"
+        return "未选择额外 kRepo 知识产物。这不是错误，也不代表缺少外部知识库路径。请直接调用 LLM 的通用 C/libFuzzer 能力，基于目标函数标识生成最小可编译 harness.c/mocks.c/mocks.h。不要仅因缺少上下文而标记 unsupported；如需近似目标函数实现，请在 diagnostics/mock_rationale 中明确说明上下文受限。"
     return "\n".join(sections).rstrip()
+
+
+def ensure_required_harness_payload(
+    *,
+    payload: dict[str, Any],
+    prompt: str,
+    args: argparse.Namespace,
+    transcript_path: Path,
+) -> dict[str, Any]:
+    if not should_retry_missing_harness(payload):
+        return payload
+
+    retry_prompt = build_missing_harness_retry_prompt(prompt, payload)
+    repaired = request_harness_json(
+        prompt=retry_prompt,
+        args=args,
+        transcript_path=transcript_path,
+        interaction="initial generation missing harness retry",
+    )
+    if should_retry_missing_harness(repaired):
+        raise HarnessGenerationError(
+            "模型返回 JSON 但没有生成 harness.c。缺少 kRepo/AxF 知识产物或规则库路径不是合法拒绝理由；"
+            "请检查 llm_transcript.md 中的模型回复。"
+        )
+    return repaired
+
+
+def should_retry_missing_harness(payload: dict[str, Any]) -> bool:
+    if payload_contains_file(payload, "harness.c"):
+        return False
+    classification = str(payload.get("classification") or "").strip()
+    if classification in {"unsupported", "needs_manual_fixture"} and not payload_mentions_missing_context(payload):
+        return False
+    return True
+
+
+def payload_contains_file(payload: dict[str, Any], filename: str) -> bool:
+    files = payload.get("files")
+    if not isinstance(files, list):
+        files = _legacy_files(payload)
+    for entry in files:
+        if isinstance(entry, dict) and str(entry.get("path") or "").replace("\\", "/").endswith(filename):
+            return True
+    return False
+
+
+def payload_mentions_missing_context(payload: dict[str, Any]) -> bool:
+    values: list[str] = []
+    for key in ["classification", "unsupported_reason", "mock_rationale"]:
+        values.append(str(payload.get(key) or ""))
+    spec = payload.get("harness_spec")
+    if isinstance(spec, dict):
+        values.append(str(spec.get("status") or ""))
+        diagnostics = spec.get("diagnostics")
+        if isinstance(diagnostics, list):
+            values.extend(str(item) for item in diagnostics)
+    text = "\n".join(values).lower()
+    markers = [
+        "krepo",
+        "axf",
+        "目标函数信息",
+        "目标函数",
+        "target function",
+        "需要以下信息",
+        "需要提供",
+        "需要用户提供",
+        "知识产物",
+        "知识库",
+        "规则库",
+        "上下文",
+        "context",
+        "knowledge",
+        "not found",
+        "cannot find",
+        "没有找到",
+        "未找到",
+        "缺少",
+        "路径",
+    ]
+    return any(marker in text for marker in markers)
+
+
+def build_missing_harness_retry_prompt(original_prompt: str, payload: dict[str, Any]) -> str:
+    previous = json.dumps(payload, ensure_ascii=False)
+    if len(previous) > 4000:
+        previous = previous[:4000] + "...[truncated]"
+    return (
+        original_prompt
+        + "\n\n上一轮模型返回了 JSON，但没有提供 files[].path == \"harness.c\"，或者把缺少目标函数信息、"
+        "缺少 kRepo/AxF 知识产物、缺少 harness 生成规则库路径当成拒绝理由。这个理由无效：目标函数信息已经给出，"
+        "本 prompt 已经包含全部可用输入，额外知识产物只是可选参考。"
+        "\n请重新输出完整 JSON，除非目标确实依赖不可模拟的真实硬件、真实内核并发语义或无法近似的函数指针分派，否则必须包含 harness.c、mocks.h、mocks.c、build.sh、build.ps1。"
+        "\n不要输出 Markdown，不要解释，不要要求用户提供目标函数信息或路径。"
+        "\n\n上一轮 JSON 摘要：\n"
+        + previous
+    )
 
 
 def request_harness_json(
