@@ -209,6 +209,20 @@ select:focus {
   grid-column: 1 / -1;
 }
 
+.inline-action {
+  margin: -4px 0 12px;
+  display: grid;
+  gap: 7px;
+}
+
+.inline-status {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
 .content {
   padding: 22px;
   overflow: auto;

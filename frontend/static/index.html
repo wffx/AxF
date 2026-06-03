@@ -69,6 +69,10 @@
               API Key（临时）
               <input name="api_key" type="password" autocomplete="off" placeholder="可临时填写；不会写入 task.json" />
             </label>
+            <div class="inline-action">
+              <button class="button ghost" id="save-api-key" type="button">保存 API Key 到 .env.local</button>
+              <span id="api-key-status" class="inline-status"></span>
+            </div>
             <label>
               模型超时秒数
               <input name="model_timeout" inputmode="numeric" />

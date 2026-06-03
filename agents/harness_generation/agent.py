@@ -577,13 +577,18 @@ def load_model_json_text(text: str) -> Any:
 
 
 def model_json_candidates(text: str) -> list[str]:
-    quoted_keys = quote_bare_json_object_keys(text)
-    return [
-        text,
-        escape_json_string_controls(text),
-        quoted_keys,
-        escape_json_string_controls(quoted_keys),
-    ]
+    variants: list[str] = []
+    for single_quote_variant in [text, normalize_single_quoted_json_strings(text)]:
+        for key_variant in [single_quote_variant, quote_bare_json_object_keys(single_quote_variant)]:
+            for comma_variant in [key_variant, remove_trailing_json_commas(key_variant)]:
+                variants.extend([comma_variant, escape_json_string_controls(comma_variant)])
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in variants:
+        if candidate not in seen:
+            deduped.append(candidate)
+            seen.add(candidate)
+    return deduped
 
 
 def quote_bare_json_object_keys(text: str) -> str:
@@ -624,9 +629,37 @@ def quote_bare_json_object_keys(text: str) -> str:
             result.append(text[index])
             index += 1
         key_start = index
-        if index < length and (text[index].isalpha() or text[index] == "_"):
+        if index < length and text[index] in {"'", '"'}:
+            quote = text[index]
             index += 1
-            while index < length and (text[index].isalnum() or text[index] == "_"):
+            key_chars: list[str] = []
+            key_escaped = False
+            while index < length:
+                current = text[index]
+                if key_escaped:
+                    key_chars.append(current)
+                    key_escaped = False
+                elif current == "\\":
+                    key_escaped = True
+                elif current == quote:
+                    break
+                else:
+                    key_chars.append(current)
+                index += 1
+            if index < length and text[index] == quote:
+                index += 1
+                after_key = index
+                while after_key < length and text[after_key].isspace():
+                    after_key += 1
+                if after_key < length and text[after_key] == ":":
+                    result.append(json.dumps("".join(key_chars)))
+                    continue
+            result.append(text[key_start:index])
+            continue
+
+        if index < length and (text[index].isalpha() or text[index] in {"_", "$"}):
+            index += 1
+            while index < length and (text[index].isalnum() or text[index] in {"_", "$", "-"}):
                 index += 1
             key = text[key_start:index]
             after_key = index
@@ -635,9 +668,111 @@ def quote_bare_json_object_keys(text: str) -> str:
             if after_key < length and text[after_key] == ":":
                 result.append(f'"{key}"')
                 continue
-        result.append(text[key_start:index])
+        if index < length:
+            result.append(text[index])
+            index += 1
+        else:
+            result.append(text[key_start:index])
         continue
 
+    return "".join(result)
+
+
+def normalize_single_quoted_json_strings(text: str) -> str:
+    result: list[str] = []
+    index = 0
+    length = len(text)
+    in_double_string = False
+    escaped = False
+
+    while index < length:
+        char = text[index]
+        if in_double_string:
+            result.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_double_string = False
+            index += 1
+            continue
+
+        if char == '"':
+            in_double_string = True
+            result.append(char)
+            index += 1
+            continue
+
+        if char != "'":
+            result.append(char)
+            index += 1
+            continue
+
+        index += 1
+        value_chars: list[str] = []
+        single_escaped = False
+        closed = False
+        while index < length:
+            current = text[index]
+            if single_escaped:
+                value_chars.append(current)
+                single_escaped = False
+            elif current == "\\":
+                single_escaped = True
+            elif current == "'":
+                closed = True
+                index += 1
+                break
+            else:
+                value_chars.append(current)
+            index += 1
+        if closed:
+            result.append(json.dumps("".join(value_chars)))
+        else:
+            result.append("'" + "".join(value_chars))
+    return "".join(result)
+
+
+def remove_trailing_json_commas(text: str) -> str:
+    result: list[str] = []
+    index = 0
+    length = len(text)
+    in_string = False
+    escaped = False
+
+    while index < length:
+        char = text[index]
+        if in_string:
+            result.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+
+        if char == '"':
+            in_string = True
+            result.append(char)
+            index += 1
+            continue
+
+        if char != ",":
+            result.append(char)
+            index += 1
+            continue
+
+        lookahead = index + 1
+        while lookahead < length and text[lookahead].isspace():
+            lookahead += 1
+        if lookahead < length and text[lookahead] in "}]":
+            index += 1
+            continue
+        result.append(char)
+        index += 1
     return "".join(result)
 
 

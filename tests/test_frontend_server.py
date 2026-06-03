@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import tempfile
+import os
 from pathlib import Path
 from unittest import mock
 
@@ -18,8 +19,10 @@ from frontend.server import (
     _harness_events_for_step,
     _harness_summary,
     _runtime_env_from_config,
+    save_api_key_to_local_env,
     _sanitize_task_config,
     _selected_artifacts,
+    write_env_value,
 )
 
 
@@ -103,6 +106,33 @@ class FrontendServerTest(unittest.TestCase):
         self.assertNotIn("api_key", task_json["config"])
         self.assertTrue(task_json["config"]["api_key_provided"])
         self.assertEqual(task.runtime_env, {"API_KEY": "sk-secret"})
+
+    def test_write_env_value_updates_or_appends_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / ".env.local"
+            env_path.write_text("MODEL=glm-5.1\nAPI_KEY=old\n# comment\n", encoding="utf-8")
+
+            write_env_value(env_path, "API_KEY", "sk-new")
+            write_env_value(env_path, "CHAT_COMPLETIONS_URL", "https://example.invalid/v1/chat/completions")
+            text = env_path.read_text(encoding="utf-8")
+
+        self.assertIn("MODEL=glm-5.1", text)
+        self.assertIn("API_KEY=sk-new", text)
+        self.assertIn("CHAT_COMPLETIONS_URL=https://example.invalid/v1/chat/completions", text)
+        self.assertNotIn("API_KEY=old", text)
+        self.assertIn("# comment", text)
+
+    def test_save_api_key_to_local_env_updates_file_and_process_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("frontend.server.PROJECT_ROOT", root), mock.patch.dict(os.environ, {}, clear=True):
+                result = save_api_key_to_local_env({"api_key_env": "API_KEY", "api_key": "sk-secret"})
+                text = (root / ".env.local").read_text(encoding="utf-8")
+                env_value = os.environ["API_KEY"]
+
+        self.assertEqual(result["env_name"], "API_KEY")
+        self.assertIn("API_KEY=sk-secret", text)
+        self.assertEqual(env_value, "sk-secret")
 
     def test_empty_artifact_selection_does_not_fall_back_to_defaults(self) -> None:
         self.assertEqual(_selected_artifacts({"artifacts": []}), set())

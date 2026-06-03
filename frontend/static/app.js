@@ -1,6 +1,8 @@
 const form = document.querySelector("#task-form");
 const refreshButton = document.querySelector("#refresh");
 const cancelButton = document.querySelector("#cancel");
+const saveApiKeyButton = document.querySelector("#save-api-key");
+const apiKeyStatus = document.querySelector("#api-key-status");
 const statusBadge = document.querySelector("#status");
 const taskTitle = document.querySelector("#task-title");
 const eventsView = document.querySelector("#events-view");
@@ -145,6 +147,29 @@ function readConfig() {
   }
   config.artifacts = data.getAll("artifacts");
   return config;
+}
+
+async function saveApiKey() {
+  const apiKey = form.elements.api_key?.value.trim() || "";
+  const apiKeyEnv = form.elements.api_key_env?.value.trim() || "API_KEY";
+  if (!apiKey) {
+    apiKeyStatus.textContent = "请先填写 API Key。";
+    return;
+  }
+  saveApiKeyButton.disabled = true;
+  apiKeyStatus.textContent = "正在保存...";
+  try {
+    const result = await api("/api/settings/api-key", {
+      method: "POST",
+      body: JSON.stringify({ api_key: apiKey, api_key_env: apiKeyEnv }),
+    });
+    form.elements.api_key.value = "";
+    apiKeyStatus.textContent = `已保存 ${result.env_name} 到 ${result.env_path}`;
+  } catch (error) {
+    apiKeyStatus.textContent = `保存失败: ${error.message}`;
+  } finally {
+    saveApiKeyButton.disabled = false;
+  }
 }
 
 function syncArtifactNotes() {
@@ -617,6 +642,8 @@ refreshButton.addEventListener("click", async () => {
   await refreshTasks();
   await refreshActiveTask();
 });
+
+saveApiKeyButton.addEventListener("click", saveApiKey);
 
 for (const tab of document.querySelectorAll(".tab")) {
   tab.addEventListener("click", () => switchTab(tab.dataset.tab));

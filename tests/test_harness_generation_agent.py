@@ -138,6 +138,23 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertIn("classification: keep", payload["files"][0]["content"])
         self.assertEqual(payload["harness_spec"]["function"]["name"], "can_send")
 
+    def test_parse_model_json_accepts_json_like_single_quotes_and_trailing_commas(self) -> None:
+        content = """
+{
+  'classification': 'skb_handler',
+  files: [
+    {'path': 'harness.c', 'content': 'int LLVMFuzzerTestOneInput(const unsigned char *d, unsigned long s){return 0;}'},
+  ],
+  harness_spec: {'status': 'generated',},
+}
+"""
+
+        payload = parse_model_json(content)
+
+        self.assertEqual(payload["classification"], "skb_handler")
+        self.assertEqual(payload["files"][0]["path"], "harness.c")
+        self.assertEqual(payload["harness_spec"]["status"], "generated")
+
     def test_request_harness_json_accepts_streaming_chat_response(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {"API_KEY": "secret"}):
             transcript = Path(tmp) / "llm_transcript.md"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,7 @@ DEFAULT_WORKSPACE = PROJECT_ROOT / "workspace" / "web" / "tasks"
 HARNESS_AGENT_ARTIFACT = "harness_generation_agent"
 DEFAULT_MODEL_TIMEOUT = 300
 DEFAULT_MODEL_MAX_RETRIES = 2
+ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 @dataclass(frozen=True)
@@ -453,6 +455,14 @@ def _handler_factory(store: TaskStore) -> type[BaseHTTPRequestHandler]:
                     return
                 self._send_json(task.to_json(), status=HTTPStatus.CREATED)
                 return
+            if path == "/api/settings/api-key":
+                try:
+                    result = save_api_key_to_local_env(self._read_json())
+                except ValueError as exc:
+                    self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                    return
+                self._send_json(result)
+                return
             if path.startswith("/api/tasks/") and path.endswith("/cancel"):
                 task_id = path.split("/")[3]
                 if not store.cancel(task_id):
@@ -581,6 +591,53 @@ def _runtime_env_from_config(config: dict[str, Any]) -> dict[str, str]:
         return {}
     env_name = str(config.get("api_key_env") or "API_KEY").strip() or "API_KEY"
     return {env_name: direct_key}
+
+
+def save_api_key_to_local_env(config: dict[str, Any]) -> dict[str, str]:
+    api_key = str(config.get("api_key") or "").strip()
+    env_name = str(config.get("api_key_env") or "API_KEY").strip() or "API_KEY"
+    if not api_key:
+        raise ValueError("API Key 不能为空")
+    if not ENV_NAME_RE.match(env_name):
+        raise ValueError("API Key 环境变量名无效")
+    env_path = PROJECT_ROOT / ".env.local"
+    write_env_value(env_path, env_name, api_key)
+    os.environ[env_name] = api_key
+    return {"status": "saved", "env_name": env_name, "env_path": str(env_path)}
+
+
+def write_env_value(path: Path, key: str, value: str) -> None:
+    line = f"{key}={quote_env_value(value)}"
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    replaced = False
+    output: list[str] = []
+    for existing in lines:
+        parsed_key = env_line_key(existing)
+        if parsed_key == key:
+            if not replaced:
+                output.append(line)
+                replaced = True
+            continue
+        output.append(existing)
+    if not replaced:
+        output.append(line)
+    path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+
+
+def env_line_key(line: str) -> str:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        return ""
+    if stripped.startswith("export "):
+        stripped = stripped.removeprefix("export ").strip()
+    key = stripped.split("=", 1)[0].strip()
+    return key if ENV_NAME_RE.match(key) else ""
+
+
+def quote_env_value(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_./:@%+=,\-]+", value):
+        return value
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _sanitize_task_config(config: dict[str, Any]) -> dict[str, Any]:
