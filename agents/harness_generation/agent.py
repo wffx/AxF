@@ -38,11 +38,10 @@ DEFAULT_MAX_REPAIR_ROUNDS = 3
 DEFAULT_RUN_SECONDS = 10
 DEFAULT_MODEL_TIMEOUT = 300
 DEFAULT_LLM_MAX_RETRIES = 2
-MAX_DIRECT_CLI_PROMPT_CHARS = 8_000
-OPENCODE_PROMPT_FILE_MESSAGE = (
-    "完整 harness 生成任务已经作为 --file 文件附加到本条消息。请直接按附加文件里的目标函数和内联上下文生成结果。"
-    "目标函数信息已经在附加文件中给出；不要要求用户提供目标函数信息、kRepo/AxF 知识库路径或规则库路径。"
-    "缺少额外知识产物也必须先生成保守 harness。"
+OPENCODE_WORKSPACE_MESSAGE = (
+    "你当前的 --dir 是本次 harness 生成的隔离工作区。必须先读取相对路径 context/prompt.md，"
+    "该文件已经包含目标函数信息、输出 schema 和全部可用上下文。不要要求用户提供目标函数信息、"
+    "kRepo/AxF 知识产物、知识库路径或规则库路径；缺少额外知识产物也必须先生成保守 harness。"
     "只输出一个可被 json.loads 解析的 JSON 对象，不要输出 Markdown 或解释。"
 )
 
@@ -147,12 +146,14 @@ def generate_harness(args: argparse.Namespace) -> dict[str, str]:
         args=args,
         transcript_path=transcript_path,
         interaction="initial generation",
+        record_only_harness=True,
     )
     payload = ensure_required_harness_payload(
         payload=payload,
         prompt=prompt,
         args=args,
         transcript_path=transcript_path,
+        record_only_harness=True,
     )
 
     (output_dir / "llm_response.json").write_text(
@@ -257,6 +258,7 @@ def ensure_required_harness_payload(
     prompt: str,
     args: argparse.Namespace,
     transcript_path: Path,
+    record_only_harness: bool = False,
 ) -> dict[str, Any]:
     if not should_retry_missing_harness(payload):
         return payload
@@ -267,11 +269,12 @@ def ensure_required_harness_payload(
         args=args,
         transcript_path=transcript_path,
         interaction="initial generation missing harness retry",
+        record_only_harness=record_only_harness,
     )
     if should_retry_missing_harness(repaired):
         raise HarnessGenerationError(
             "模型返回 JSON 但没有生成 harness.c。缺少 kRepo/AxF 知识产物或规则库路径不是合法拒绝理由；"
-            "请检查 llm_transcript.md 中的模型回复。"
+            "如果没有生成 LLM 交互日志，说明 agent 未返回 harness。"
         )
     return repaired
 
@@ -353,6 +356,7 @@ def request_harness_json(
     args: argparse.Namespace,
     transcript_path: Path | None = None,
     interaction: str = "",
+    record_only_harness: bool = False,
 ) -> dict[str, Any]:
     mode = normalize_llm_mode(getattr(args, "llm_mode", "") or os.environ.get("LLM_MODE") or DEFAULT_LLM_MODE)
     if mode == "opencode":
@@ -361,12 +365,14 @@ def request_harness_json(
             args=args,
             transcript_path=transcript_path,
             interaction=interaction,
+            record_only_harness=record_only_harness,
         )
     return request_harness_json_with_api(
         prompt=prompt,
         args=args,
         transcript_path=transcript_path,
         interaction=interaction,
+        record_only_harness=record_only_harness,
     )
 
 
@@ -376,6 +382,7 @@ def request_harness_json_with_api(
     args: argparse.Namespace,
     transcript_path: Path | None = None,
     interaction: str = "",
+    record_only_harness: bool = False,
 ) -> dict[str, Any]:
     model = args.model or os.environ.get("MODEL") or DEFAULT_MODEL
     chat_url = normalize_chat_url(args.chat_url or _env_first("CHAT_COMPLETIONS_URL", "API_BASE_URL", "BASE_URL"))
@@ -421,14 +428,14 @@ def request_harness_json_with_api(
             break
         except (TimeoutError, socket.timeout) as exc:
             error = f"模型请求超时（{timeout} 秒，第 {request_attempt}/{max_retries + 1} 次）：{exc}"
-            append_llm_transcript(transcript_path, interaction=attempt_label, model=model, messages=messages, error=error)
+            record_llm_transcript(transcript_path, record_only_harness=record_only_harness, interaction=attempt_label, model=model, messages=messages, error=error)
             if request_attempt <= max_retries:
                 log_llm_retry(error, request_attempt, max_retries)
                 continue
             raise HarnessGenerationError(error) from exc
         except urllib.error.URLError as exc:
             error = f"请求模型失败（第 {request_attempt}/{max_retries + 1} 次）：{exc}"
-            append_llm_transcript(transcript_path, interaction=attempt_label, model=model, messages=messages, error=error)
+            record_llm_transcript(transcript_path, record_only_harness=record_only_harness, interaction=attempt_label, model=model, messages=messages, error=error)
             if is_timeout_error(exc) and request_attempt <= max_retries:
                 log_llm_retry(error, request_attempt, max_retries)
                 continue
@@ -455,15 +462,16 @@ def request_harness_json_with_api(
             content = _choice_content_from_raw(raw)
         except (TimeoutError, socket.timeout) as exc:
             error = f"非流式模型请求超时（{timeout} 秒）：{exc}"
-            append_llm_transcript(transcript_path, interaction=fallback_label, model=model, messages=messages, error=error)
+            record_llm_transcript(transcript_path, record_only_harness=record_only_harness, interaction=fallback_label, model=model, messages=messages, error=error)
             raise HarnessGenerationError(error) from exc
         except urllib.error.URLError as exc:
             error = f"非流式请求模型失败：{exc}"
-            append_llm_transcript(transcript_path, interaction=fallback_label, model=model, messages=messages, error=error)
+            record_llm_transcript(transcript_path, record_only_harness=record_only_harness, interaction=fallback_label, model=model, messages=messages, error=error)
             raise HarnessGenerationError(error) from exc
 
-    append_llm_transcript(
+    record_llm_transcript(
         transcript_path,
+        record_only_harness=record_only_harness,
         interaction=interaction,
         model=model,
         messages=messages,
@@ -492,6 +500,7 @@ def request_harness_json_with_api(
             interaction=interaction,
             error=exc,
             max_retries=max_retries,
+            record_only_harness=record_only_harness,
         )
         if retry is not None:
             return retry
@@ -504,6 +513,7 @@ def request_harness_json_with_opencode(
     args: argparse.Namespace,
     transcript_path: Path | None = None,
     interaction: str = "",
+    record_only_harness: bool = False,
 ) -> dict[str, Any]:
     tool = normalize_ai_cli_tool(
         getattr(args, "opencode_tool", "")
@@ -538,7 +548,7 @@ def request_harness_json_with_opencode(
     for request_attempt in range(1, max_retries + 2):
         attempt_label = interaction_label(interaction or tool, request_attempt, max_retries)
         log_llm_interaction("request", attempt_label, transcript_path)
-        prompt_file = prepare_cli_prompt_file(
+        workspace_dir = prepare_opencode_workspace(
             tool=tool,
             prompt=current_prompt,
             transcript_path=transcript_path,
@@ -548,14 +558,13 @@ def request_harness_json_with_opencode(
             command = build_opencode_command(
                 tool=tool,
                 executable=executable,
-                repo=args.repo,
-                prompt=current_prompt,
+                repo=str(workspace_dir) if workspace_dir else args.repo,
+                prompt=OPENCODE_WORKSPACE_MESSAGE if workspace_dir else current_prompt,
                 model=model,
-                prompt_file=prompt_file,
             )
         except FileNotFoundError as exc:
             error = str(exc)
-            append_llm_transcript(transcript_path, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, error=error)
+            record_llm_transcript(transcript_path, record_only_harness=record_only_harness, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, error=error)
             raise HarnessGenerationError(error) from exc
         try:
             completed = subprocess.run(
@@ -570,7 +579,7 @@ def request_harness_json_with_opencode(
         except subprocess.TimeoutExpired as exc:
             raw = (exc.stdout or "") + (exc.stderr or "")
             error = f"{tool} CLI 超时（{timeout} 秒，第 {request_attempt}/{max_retries + 1} 次）"
-            append_llm_transcript(transcript_path, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, assistant=raw, error=error)
+            record_llm_transcript(transcript_path, record_only_harness=record_only_harness, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, assistant=raw, error=error)
             if request_attempt <= max_retries:
                 log_llm_retry(error, request_attempt, max_retries)
                 continue
@@ -580,12 +589,13 @@ def request_harness_json_with_opencode(
                 f"{tool} CLI 启动失败：{exc}。"
                 "请检查模型设置中的 CLI executable；Windows 上建议填写完整路径，例如 C:/tools/nga.cmd。"
             )
-            append_llm_transcript(transcript_path, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, error=error)
+            record_llm_transcript(transcript_path, record_only_harness=record_only_harness, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, error=error)
             raise HarnessGenerationError(error) from exc
 
         raw = "\n".join(part for part in [completed.stdout, completed.stderr] if part).strip()
-        append_llm_transcript(
+        record_llm_transcript(
             transcript_path,
+            record_only_harness=record_only_harness,
             interaction=attempt_label,
             model=model or f"{tool}-default",
             messages=messages,
@@ -634,7 +644,6 @@ def build_opencode_command(
     repo: str,
     prompt: str,
     model: str = "",
-    prompt_file: Path | None = None,
 ) -> list[str]:
     selected_tool = normalize_ai_cli_tool(tool, executable)
     resolved_executable = resolve_cli_executable(selected_tool, executable)
@@ -644,7 +653,6 @@ def build_opencode_command(
         repo=repo,
         prompt=prompt,
         model=model,
-        prompt_file=prompt_file,
     )
 
 
@@ -655,18 +663,13 @@ def build_cli_command(
     repo: str,
     prompt: str,
     model: str = "",
-    prompt_file: Path | None = None,
 ) -> list[str]:
     if tool in {"nga", "opencode"}:
         repo_dir = resolve_repo_dir(repo)
         command = [executable, "run", "--dir", str(repo_dir)]
         if model:
             command.extend(["--model", model])
-        if prompt_file:
-            command.append(OPENCODE_PROMPT_FILE_MESSAGE)
-            command.extend(["--file", str(prompt_file)])
-        else:
-            command.append(prompt)
+        command.append(prompt)
         return command
 
     if tool == "claude":
@@ -686,7 +689,7 @@ def build_cli_command(
     raise HarnessGenerationError(f"未知 AI CLI 工具：{tool}")
 
 
-def prepare_cli_prompt_file(
+def prepare_opencode_workspace(
     *,
     tool: str,
     prompt: str,
@@ -695,16 +698,16 @@ def prepare_cli_prompt_file(
 ) -> Path | None:
     if tool not in {"nga", "opencode"}:
         return None
-    if len(prompt) <= MAX_DIRECT_CLI_PROMPT_CHARS:
-        return None
     if transcript_path:
-        prompt_dir = transcript_path.parent
+        workspace_dir = transcript_path.parent / "opencode_workspace"
     else:
-        prompt_dir = PROJECT_ROOT / "workspace" / "llm_prompts"
-    prompt_dir.mkdir(parents=True, exist_ok=True)
-    prompt_path = prompt_dir / f"opencode_prompt_{request_attempt}.txt"
-    prompt_path.write_text(prompt, encoding="utf-8")
-    return prompt_path
+        workspace_dir = PROJECT_ROOT / "workspace" / "opencode_workspace"
+    context_dir = workspace_dir / "context"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    (context_dir / "prompt.md").write_text(prompt, encoding="utf-8")
+    (context_dir / f"prompt_request_{request_attempt}.md").write_text(prompt, encoding="utf-8")
+    (workspace_dir / "TASK.md").write_text(OPENCODE_WORKSPACE_MESSAGE + "\n", encoding="utf-8")
+    return workspace_dir
 
 
 def resolve_cli_executable(tool: str, executable: str = "") -> str:
@@ -751,8 +754,8 @@ def log_llm_interaction(kind: str, interaction: str, transcript_path: Path | Non
     if not transcript_path:
         return
     label = interaction or "llm"
-    action = "请求" if kind == "request" else "响应"
-    print(f"LLM 交互 [{label}] {action}已记录：{transcript_path}", flush=True)
+    action = "请求已发送" if kind == "request" else "响应已返回"
+    print(f"LLM 交互 [{label}] {action}", flush=True)
 
 
 def log_llm_retry(error: str, request_attempt: int, max_retries: int) -> None:
@@ -772,6 +775,7 @@ def retry_invalid_json_response(
     interaction: str,
     error: json.JSONDecodeError,
     max_retries: int,
+    record_only_harness: bool = False,
 ) -> dict[str, Any] | None:
     retry_attempts = max(1, max_retries)
     last_error: json.JSONDecodeError | Exception = error
@@ -810,14 +814,14 @@ def retry_invalid_json_response(
                 raw = read_chat_response(response, streaming=False)
         except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
             last_error = exc
-            append_llm_transcript(transcript_path, interaction=retry_label, model=model, messages=messages, error=str(exc))
+            record_llm_transcript(transcript_path, record_only_harness=record_only_harness, interaction=retry_label, model=model, messages=messages, error=str(exc))
             if retry_attempt < retry_attempts:
                 log_retry_remaining(f"JSON 修复请求失败：{exc}", retry_attempt, retry_attempts)
                 continue
             return None
 
         content = _choice_content_from_raw(raw)
-        append_llm_transcript(transcript_path, interaction=retry_label, model=model, messages=messages, assistant=content or raw)
+        record_llm_transcript(transcript_path, record_only_harness=record_only_harness, interaction=retry_label, model=model, messages=messages, assistant=content or raw)
         log_llm_interaction("response", retry_label, transcript_path)
         if not content:
             last_error = HarnessGenerationError("JSON 修复响应中没有 choices[0].message.content")
@@ -964,6 +968,38 @@ def append_llm_transcript(
             handle.write("````\n\n")
 
 
+def record_llm_transcript(
+    path: Path | None,
+    *,
+    record_only_harness: bool,
+    interaction: str,
+    model: str,
+    messages: list[dict[str, str]],
+    assistant: str = "",
+    error: str = "",
+) -> None:
+    if record_only_harness and not assistant_returns_harness(assistant):
+        return
+    append_llm_transcript(
+        path,
+        interaction=interaction,
+        model=model,
+        messages=messages,
+        assistant=assistant,
+        error=error,
+    )
+
+
+def assistant_returns_harness(assistant: str) -> bool:
+    if not assistant.strip():
+        return False
+    try:
+        payload = parse_model_json(assistant)
+    except (HarnessGenerationError, json.JSONDecodeError):
+        return False
+    return payload_contains_file(payload, "harness.c")
+
+
 def parse_model_json(content: str) -> dict[str, Any]:
     text = content.strip()
     if text.startswith("```"):
@@ -981,6 +1017,8 @@ def parse_model_json(content: str) -> dict[str, Any]:
 
 def load_model_json_text(text: str) -> Any:
     candidates = model_json_candidates(text)
+    for balanced in extract_json_objects(text):
+        candidates.extend(model_json_candidates(balanced))
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end > start:
@@ -1000,6 +1038,42 @@ def load_model_json_text(text: str) -> Any:
     if last_error is not None:
         raise last_error
     raise json.JSONDecodeError("empty JSON candidate", text, 0)
+
+
+def extract_json_objects(text: str) -> list[str]:
+    objects: list[str] = []
+    start: int | None = None
+    depth = 0
+    in_string = False
+    escape = False
+    for index, char in enumerate(text):
+        if start is None:
+            if char == "{":
+                start = index
+                depth = 1
+                in_string = False
+                escape = False
+            continue
+
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                objects.append(text[start : index + 1])
+                start = None
+    return objects
 
 
 def model_json_candidates(text: str) -> list[str]:
@@ -1274,6 +1348,7 @@ def compile_and_repair(
                 args=args,
                 transcript_path=output_dir / "llm_transcript.md",
                 interaction=f"repair attempt {attempt}",
+                record_only_harness=True,
             )
         except HarnessGenerationError as exc:
             return finish_compile(

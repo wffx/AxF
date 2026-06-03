@@ -28,6 +28,7 @@ from agents.harness_generation.agent import (
     normalize_chat_url,
     parse_model_json,
     read_streaming_chat_response,
+    record_llm_transcript,
     request_harness_json,
     resolve_clang,
     resolve_cli_executable,
@@ -78,6 +79,41 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertIn("user says", text)
         self.assertIn('{"files":[]}', text)
         self.assertNotIn("API_KEY", text)
+
+    def test_record_llm_transcript_skips_non_harness_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "llm_transcript.md"
+
+            record_llm_transcript(
+                path,
+                record_only_harness=True,
+                interaction="initial generation",
+                model="nga-default",
+                messages=[{"role": "user", "content": "生成 harness"}],
+                assistant='{"classification":"needs_manual_fixture","files":[]}',
+            )
+
+            exists = path.exists()
+
+        self.assertFalse(exists)
+
+    def test_record_llm_transcript_records_harness_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "llm_transcript.md"
+
+            record_llm_transcript(
+                path,
+                record_only_harness=True,
+                interaction="initial generation",
+                model="nga-default",
+                messages=[{"role": "user", "content": "生成 harness"}],
+                assistant='{"classification":"byte_parser","files":[{"path":"harness.c","content":"int x;"}]}',
+            )
+
+            text = path.read_text(encoding="utf-8")
+
+        self.assertIn("initial generation", text)
+        self.assertIn("harness.c", text)
 
     def test_request_harness_json_retries_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {"API_KEY": "secret"}):
@@ -176,15 +212,55 @@ class HarnessGenerationAgentTest(unittest.TestCase):
 
             command = run.call_args.args[0]
             text = transcript.read_text(encoding="utf-8")
+            workspace_prompt_text = (Path(command[3]) / "context" / "prompt.md").read_text(encoding="utf-8")
 
         self.assertEqual(payload["classification"], "byte_parser")
-        self.assertEqual(command[:4], ["nga", "run", "--dir", str(PROJECT_ROOT)])
+        self.assertEqual(command[:3], ["nga", "run", "--dir"])
+        self.assertTrue(command[3].endswith("opencode_workspace"))
         self.assertEqual(command[4:6], ["--model", "anthropic/claude-sonnet-4"])
-        self.assertEqual(command[-1], "生成 harness")
+        self.assertIn("context/prompt.md", command[-1])
+        self.assertEqual(workspace_prompt_text, "生成 harness")
         self.assertIn("anthropic/claude-sonnet-4", text)
         self.assertIn('"classification":"byte_parser"', text)
 
-    def test_request_harness_json_uses_file_for_long_opencode_prompt(self) -> None:
+    def test_request_harness_json_record_only_harness_skips_non_harness_opencode_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "llm_transcript.md"
+            args = argparse.Namespace(
+                repo=".",
+                llm_mode="opencode",
+                opencode_tool="nga",
+                opencode_executable="nga",
+                opencode_model="",
+                model="",
+                timeout=300,
+                max_retries=0,
+            )
+            completed = subprocess.CompletedProcess(
+                ["opencode"],
+                0,
+                stdout='{"classification":"needs_manual_fixture","files":[]}',
+                stderr="",
+            )
+
+            with (
+                mock.patch("agents.harness_generation.agent.shutil.which", return_value="nga"),
+                mock.patch("agents.harness_generation.agent.subprocess.run", return_value=completed),
+            ):
+                payload = request_harness_json(
+                    prompt="生成 harness",
+                    args=args,
+                    transcript_path=transcript,
+                    interaction="initial generation",
+                    record_only_harness=True,
+                )
+
+            exists = transcript.exists()
+
+        self.assertEqual(payload["classification"], "needs_manual_fixture")
+        self.assertFalse(exists)
+
+    def test_request_harness_json_uses_isolated_workspace_for_opencode_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript = Path(tmp) / "llm_transcript.md"
             args = argparse.Namespace(
@@ -217,15 +293,19 @@ class HarnessGenerationAgentTest(unittest.TestCase):
                 )
 
             command = run.call_args.args[0]
-            prompt_file = Path(command[command.index("--file") + 1])
-            prompt_file_text = prompt_file.read_text(encoding="utf-8")
+            workspace_dir = Path(command[3])
+            workspace_exists = workspace_dir.is_dir()
+            prompt_file_text = (workspace_dir / "context" / "prompt.md").read_text(encoding="utf-8")
+            request_file_text = (workspace_dir / "context" / "prompt_request_1.md").read_text(encoding="utf-8")
 
         self.assertEqual(payload["classification"], "byte_parser")
-        self.assertIn("--file", command)
+        self.assertNotIn("--file", command)
         self.assertNotIn(prompt, command)
-        self.assertEqual(command[-2], "--file")
-        self.assertIn("完整 harness 生成任务", command[-3])
+        self.assertTrue(workspace_exists)
+        self.assertEqual(workspace_dir.name, "opencode_workspace")
+        self.assertIn("context/prompt.md", command[-1])
         self.assertEqual(prompt_file_text, prompt)
+        self.assertEqual(request_file_text, prompt)
 
     def test_parse_model_json_repairs_raw_newlines_inside_strings(self) -> None:
         content = '''```json
@@ -277,6 +357,33 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertEqual(payload["classification"], "skb_handler")
         self.assertEqual(payload["files"][0]["path"], "harness.c")
         self.assertEqual(payload["harness_spec"]["status"], "generated")
+
+    def test_parse_model_json_ignores_text_after_first_complete_object(self) -> None:
+        content = (
+            '{"classification":"needs_manual_fixture","files":[]}'
+            "\nnga 输出不是合法 JSON：Expecting value: line 1 column 1 (char 0)"
+        )
+
+        payload = parse_model_json(content)
+
+        self.assertEqual(payload["classification"], "needs_manual_fixture")
+        self.assertEqual(payload["files"], [])
+
+    def test_parse_model_json_extracts_first_object_from_markdown_log(self) -> None:
+        content = """
+### assistant
+
+```text
+{"classification":"byte_parser","files":[{"path":"harness.c","content":"int x;"}]}
+```
+
+retry log follows
+"""
+
+        payload = parse_model_json(content)
+
+        self.assertEqual(payload["classification"], "byte_parser")
+        self.assertEqual(payload["files"][0]["path"], "harness.c")
 
     def test_request_harness_json_accepts_streaming_chat_response(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {"API_KEY": "secret"}):
