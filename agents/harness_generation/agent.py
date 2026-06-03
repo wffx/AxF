@@ -19,6 +19,8 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = "glm-5.1"
+DEFAULT_LLM_MODE = "api"
+DEFAULT_OPENCODE_EXECUTABLE = "opencode"
 MAX_REPORT_CHARS = 50_000
 MAX_SOURCE_CHARS = 90_000
 MAX_TEXT_CHARS = 24_000
@@ -99,6 +101,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model", default="")
     parser.add_argument("--chat-url", default="")
     parser.add_argument("--api-key-env", default="API_KEY")
+    parser.add_argument("--llm-mode", choices=["api", "opencode"], default="")
+    parser.add_argument("--opencode-executable", default="", help="opencode CLI executable path or name")
+    parser.add_argument("--opencode-model", default="", help="model passed to opencode CLI; empty uses opencode default")
     parser.add_argument("--timeout", type=int, default=DEFAULT_MODEL_TIMEOUT)
     parser.add_argument("--max-retries", type=int, default=DEFAULT_LLM_MAX_RETRIES)
     parser.add_argument("--no-stream", action="store_true", help="disable streaming Chat Completions responses")
@@ -230,6 +235,29 @@ def request_harness_json(
     transcript_path: Path | None = None,
     interaction: str = "",
 ) -> dict[str, Any]:
+    mode = normalize_llm_mode(getattr(args, "llm_mode", "") or os.environ.get("LLM_MODE") or DEFAULT_LLM_MODE)
+    if mode == "opencode":
+        return request_harness_json_with_opencode(
+            prompt=prompt,
+            args=args,
+            transcript_path=transcript_path,
+            interaction=interaction,
+        )
+    return request_harness_json_with_api(
+        prompt=prompt,
+        args=args,
+        transcript_path=transcript_path,
+        interaction=interaction,
+    )
+
+
+def request_harness_json_with_api(
+    *,
+    prompt: str,
+    args: argparse.Namespace,
+    transcript_path: Path | None = None,
+    interaction: str = "",
+) -> dict[str, Any]:
     model = args.model or os.environ.get("MODEL") or DEFAULT_MODEL
     chat_url = normalize_chat_url(args.chat_url or _env_first("CHAT_COMPLETIONS_URL", "API_BASE_URL", "BASE_URL"))
     api_key_env = args.api_key_env or "API_KEY"
@@ -344,10 +372,131 @@ def request_harness_json(
             transcript_path=transcript_path,
             interaction=interaction,
             error=exc,
+            max_retries=max_retries,
         )
         if retry is not None:
             return retry
         raise HarnessGenerationError(f"模型没有返回合法 JSON：{exc}") from exc
+
+
+def request_harness_json_with_opencode(
+    *,
+    prompt: str,
+    args: argparse.Namespace,
+    transcript_path: Path | None = None,
+    interaction: str = "",
+) -> dict[str, Any]:
+    executable = (
+        getattr(args, "opencode_executable", "")
+        or os.environ.get("OPENCODE_EXECUTABLE")
+        or DEFAULT_OPENCODE_EXECUTABLE
+    )
+    model = (
+        getattr(args, "opencode_model", "")
+        or os.environ.get("OPENCODE_MODEL")
+        or getattr(args, "model", "")
+        or os.environ.get("MODEL")
+        or ""
+    )
+    timeout = max(1, int(getattr(args, "timeout", DEFAULT_MODEL_TIMEOUT)))
+    max_retries = max(0, int(getattr(args, "max_retries", DEFAULT_LLM_MAX_RETRIES)))
+    messages = [
+        {
+            "role": "system",
+            "content": "你是 AxF Harness 生成 Agent，只输出一个 JSON 对象，内容用于写入本地 fuzz harness 文件。",
+        },
+        {"role": "user", "content": prompt},
+    ]
+
+    current_prompt = prompt
+    raw = ""
+    for request_attempt in range(1, max_retries + 2):
+        attempt_label = interaction_label(interaction or "opencode", request_attempt, max_retries)
+        log_llm_interaction("request", attempt_label, transcript_path)
+        command = build_opencode_command(
+            executable=executable,
+            repo=args.repo,
+            prompt=current_prompt,
+            model=model,
+        )
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raw = (exc.stdout or "") + (exc.stderr or "")
+            error = f"opencode CLI 超时（{timeout} 秒，第 {request_attempt}/{max_retries + 1} 次）"
+            append_llm_transcript(transcript_path, interaction=attempt_label, model=model or "opencode-default", messages=messages, assistant=raw, error=error)
+            if request_attempt <= max_retries:
+                log_llm_retry(error, request_attempt, max_retries)
+                continue
+            raise HarnessGenerationError(error) from exc
+        except OSError as exc:
+            error = f"opencode CLI 启动失败：{exc}"
+            append_llm_transcript(transcript_path, interaction=attempt_label, model=model or "opencode-default", messages=messages, error=error)
+            raise HarnessGenerationError(error) from exc
+
+        raw = "\n".join(part for part in [completed.stdout, completed.stderr] if part).strip()
+        append_llm_transcript(
+            transcript_path,
+            interaction=attempt_label,
+            model=model or "opencode-default",
+            messages=messages,
+            assistant=raw,
+            error="" if completed.returncode == 0 else f"opencode CLI 退出码：{completed.returncode}",
+        )
+        log_llm_interaction("response", attempt_label, transcript_path)
+        if completed.returncode != 0:
+            error = f"opencode CLI 退出码：{completed.returncode}；输出预览：{response_preview(raw)}"
+            if request_attempt <= max_retries:
+                log_llm_retry(error, request_attempt, max_retries)
+                continue
+            raise HarnessGenerationError(error)
+        try:
+            return parse_model_json(raw)
+        except json.JSONDecodeError as exc:
+            if request_attempt <= max_retries:
+                current_prompt = (
+                    prompt
+                    + "\n\n上一轮 opencode 输出不是合法 JSON，解析错误："
+                    + str(exc)
+                    + "\n请重新输出一个完整、可被 json.loads 解析的 JSON 对象，不要输出 Markdown 或解释。"
+                )
+                messages = [messages[0], {"role": "user", "content": current_prompt}]
+                log_llm_retry(f"opencode 输出不是合法 JSON：{exc}", request_attempt, max_retries)
+                continue
+            raise HarnessGenerationError(f"opencode 没有返回合法 JSON：{exc}") from exc
+
+    raise HarnessGenerationError("opencode 未返回结果")
+
+
+def normalize_llm_mode(value: str) -> str:
+    mode = (value or DEFAULT_LLM_MODE).strip().lower()
+    if mode not in {"api", "opencode"}:
+        raise HarnessGenerationError(f"未知 LLM 调用模式：{value}")
+    return mode
+
+
+def build_opencode_command(*, executable: str, repo: str, prompt: str, model: str = "") -> list[str]:
+    repo_dir = resolve_repo_dir(repo)
+    command = [executable or DEFAULT_OPENCODE_EXECUTABLE, "run", "--dir", str(repo_dir)]
+    if model:
+        command.extend(["--model", model])
+    command.append(prompt)
+    return command
+
+
+def resolve_repo_dir(value: str) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return (PROJECT_ROOT / path).resolve()
 
 
 def log_llm_interaction(kind: str, interaction: str, transcript_path: Path | None) -> None:
@@ -374,52 +523,69 @@ def retry_invalid_json_response(
     transcript_path: Path | None,
     interaction: str,
     error: json.JSONDecodeError,
+    max_retries: int,
 ) -> dict[str, Any] | None:
-    retry_label = f"{interaction or 'llm'} JSON retry"
-    retry_prompt = (
-        original_prompt
-        + "\n\n上一轮响应不是合法 JSON，解析错误："
-        + str(error)
-        + "\n请重新输出一个完整、可被 json.loads 解析的 JSON 对象。"
-        + "\n额外限制：dict.txt 最多 20 行短 ASCII 字典项；不要输出长二进制 blob；不要输出大量重复的 \\x00；不要输出 Markdown。"
-    )
-    messages = [
-        {
-            "role": "system",
-            "content": "你是 AxF Harness 生成 Agent，只输出一个 JSON 对象，内容用于写入本地 fuzz harness 文件。",
-        },
-        {"role": "user", "content": retry_prompt},
-    ]
-    body = dict(base_body)
-    body["messages"] = messages
-    body["stream"] = False
+    retry_attempts = max(1, max_retries)
+    last_error: json.JSONDecodeError | Exception = error
+    for retry_attempt in range(1, retry_attempts + 1):
+        retry_label = json_retry_label(interaction, retry_attempt, retry_attempts)
+        retry_prompt = (
+            original_prompt
+            + "\n\n上一轮响应不是合法 JSON，解析错误："
+            + str(last_error)
+            + "\n请重新输出一个完整、可被 json.loads 解析的 JSON 对象。"
+            + "\n额外限制：dict.txt 最多 20 行短 ASCII 字典项；不要输出长二进制 blob；不要输出大量重复的 \\x00；不要输出 Markdown。"
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": "你是 AxF Harness 生成 Agent，只输出一个 JSON 对象，内容用于写入本地 fuzz harness 文件。",
+            },
+            {"role": "user", "content": retry_prompt},
+        ]
+        body = dict(base_body)
+        body["messages"] = messages
+        body["stream"] = False
 
-    log_llm_interaction("request", retry_label, transcript_path)
-    request = urllib.request.Request(
-        chat_url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = read_chat_response(response, streaming=False)
-    except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
-        append_llm_transcript(transcript_path, interaction=retry_label, model=model, messages=messages, error=str(exc))
-        return None
+        log_llm_interaction("request", retry_label, transcript_path)
+        request = urllib.request.Request(
+            chat_url,
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw = read_chat_response(response, streaming=False)
+        except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+            last_error = exc
+            append_llm_transcript(transcript_path, interaction=retry_label, model=model, messages=messages, error=str(exc))
+            if retry_attempt < retry_attempts:
+                log_retry_remaining(f"JSON 修复请求失败：{exc}", retry_attempt, retry_attempts)
+                continue
+            return None
 
-    content = _choice_content_from_raw(raw)
-    append_llm_transcript(transcript_path, interaction=retry_label, model=model, messages=messages, assistant=content or raw)
-    log_llm_interaction("response", retry_label, transcript_path)
-    if not content:
-        return None
-    try:
-        return parse_model_json(content)
-    except json.JSONDecodeError:
-        return None
+        content = _choice_content_from_raw(raw)
+        append_llm_transcript(transcript_path, interaction=retry_label, model=model, messages=messages, assistant=content or raw)
+        log_llm_interaction("response", retry_label, transcript_path)
+        if not content:
+            last_error = HarnessGenerationError("JSON 修复响应中没有 choices[0].message.content")
+            if retry_attempt < retry_attempts:
+                log_retry_remaining(str(last_error), retry_attempt, retry_attempts)
+                continue
+            return None
+        try:
+            return parse_model_json(content)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            if retry_attempt < retry_attempts:
+                log_retry_remaining(f"JSON 修复响应仍不是合法 JSON：{exc}", retry_attempt, retry_attempts)
+                continue
+            return None
+    return None
 
 
 def interaction_label(interaction: str, request_attempt: int, max_retries: int) -> str:
@@ -427,6 +593,18 @@ def interaction_label(interaction: str, request_attempt: int, max_retries: int) 
     if max_retries <= 0:
         return label
     return f"{label} request {request_attempt}/{max_retries + 1}"
+
+
+def json_retry_label(interaction: str, retry_attempt: int, retry_attempts: int) -> str:
+    label = f"{interaction or 'llm'} JSON retry"
+    if retry_attempts <= 1:
+        return label
+    return f"{label} {retry_attempt}/{retry_attempts}"
+
+
+def log_retry_remaining(error: str, attempt: int, total_attempts: int) -> None:
+    remaining = max(0, total_attempts - attempt)
+    print(f"{error}；准备重试，剩余 {remaining} 次", flush=True)
 
 
 def is_timeout_error(exc: urllib.error.URLError) -> bool:

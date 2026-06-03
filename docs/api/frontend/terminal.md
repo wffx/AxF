@@ -117,9 +117,12 @@ harness/
 --function NAME
 --file PATH
 --artifacts IDS
+--llm-mode api|opencode
 --model MODEL
 --chat-url URL
 --api-key-env NAME
+--opencode-executable PATH
+--opencode-model MODEL
 --model-timeout SECONDS
 --model-max-retries N
 --clang PATH

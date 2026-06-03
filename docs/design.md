@@ -233,7 +233,7 @@ params      -> params.txt
 : 配置源码根目录、可选 `BROWSE.VC.DB`、可选复用知识库目录、函数名和文件过滤。文件过滤用于解决同名函数问题，例如 `net/can/af_can.c`。
 
 `LLM 生成`
-: 配置模型超时秒数、模型重试次数、clang 路径、clang 模式、最大修复轮数和编译超时秒数。模型名、Chat Completions URL 和 API Key 通过主页顶部的 `模型设置` 弹窗填写，并保存到 `.env.local`。
+: 配置模型超时秒数、模型重试次数、clang 路径、clang 模式、最大修复轮数和编译超时秒数。API / opencode 调用方式、模型名、Chat Completions URL、API Key 或 opencode CLI 参数通过主页顶部的 `模型设置` 弹窗填写，并保存到 `.env.local`。
 
 `kRepo 知识抽取`
 : 只包含 kRepo/AxF 知识产物选择，例如 Markdown 报告、JSON 报告、下游源码包、上层调用链和入参约束。这里不再混入 Harness Agent。
@@ -470,9 +470,18 @@ python -m agents.harness_generation.agent \
 默认读取仓库根目录下的 `.env.local` 和 `.env`：
 
 ```text
+LLM_MODE=api
 API_KEY=...
 CHAT_COMPLETIONS_URL=...
 MODEL=glm-5.1
+```
+
+也可以使用 opencode CLI：
+
+```text
+LLM_MODE=opencode
+OPENCODE_EXECUTABLE=opencode
+OPENCODE_MODEL=anthropic/claude-sonnet-4
 ```
 
 也支持 shell 风格：
@@ -490,11 +499,19 @@ LLM 配置在前端中以 `LLM 生成` 区域呈现，含义如下：
 模型重试次数      -> --max-retries，默认 2
 ```
 
-模型连接参数通过主页顶部的 `模型设置` 弹窗配置。弹窗只有三栏：模型、Chat Completions URL 和 API Key。保存后会写入仓库根目录的 `.env.local` 并同步当前 server 进程环境变量；任务配置中不保存真实密钥。
+模型连接参数通过主页顶部的 `模型设置` 弹窗配置。API 模式填写模型、Chat Completions URL 和 API Key；opencode 模式填写 CLI 可执行文件和可选模型。保存后会写入仓库根目录的 `.env.local` 并同步当前 server 进程环境变量；任务配置中不保存真实密钥。
 
 模型请求默认使用 OpenAI-compatible Chat Completions 的流式响应，即请求体包含 `"stream": true`，并按 SSE `data:` chunk 拼接 `choices[].delta.content`。这对 harness 修复轮很重要：修复轮输出可能较长，非流式调用必须等完整响应结束才返回，容易触发 read timeout。需要排查服务端兼容性时，可在命令行加 `--no-stream` 临时退回非流式。
 
 URL 也做了兼容处理：如果配置的是完整 `.../chat/completions`，Agent 原样使用；如果配置的是 `API_BASE_URL`/`BASE_URL` 或类似 `https://host/api/v1` 的 base URL，Agent 会自动补 `/chat/completions`。
+
+当 `LLM_MODE=opencode` 时，Harness 生成 Agent 不读取 API Key，而是调用：
+
+```text
+opencode run --dir <源码根目录> --model <模型> <prompt>
+```
+
+`OPENCODE_MODEL` 为空时不传 `--model`，由 opencode 使用自己的默认模型。
 
 和编译修复相关的配置也在同一区域：
 
@@ -851,6 +868,7 @@ failed
 - 同名函数未用 `--file` 精确过滤。
 - `API_KEY` 没有设置。
 - `CHAT_COMPLETIONS_URL` 没有设置。
+- `LLM_MODE=opencode` 但找不到 opencode CLI。
 - 模型返回不是合法 JSON。
 - 模型输出的文件路径非法。
 - 编译失败后请求 LLM 修复超时。
@@ -878,6 +896,14 @@ Agent 会拒绝写出逃逸输出目录的路径，例如：
 $env:API_KEY='...'
 $env:CHAT_COMPLETIONS_URL='...'
 $env:MODEL='glm-5.1'
+```
+
+或：
+
+```powershell
+$env:LLM_MODE='opencode'
+$env:OPENCODE_EXECUTABLE='opencode'
+$env:OPENCODE_MODEL='anthropic/claude-sonnet-4'
 ```
 
 Agent 会要求模型同时输出：
@@ -908,7 +934,7 @@ Clang 路径: /usr/bin/clang
 - `.env.local` 被 `.gitignore` 忽略。
 - 不打印 API key。
 - 任务日志记录命令参数，但不记录 `Authorization` header。
-- 前端 `模型设置` 弹窗保存的 API key 只写入 `.env.local`，不写入 `task.json`、`events.jsonl`、`task.log` 或 `llm_transcript.md`。
+- 前端 `模型设置` 弹窗保存的 API key 只写入 `.env.local`，不写入 `task.json`、`events.jsonl`、`task.log` 或 `llm_transcript.md`；opencode 模式不要求 API key。
 - `llm_transcript.md` 记录 prompt 和模型回复，但不记录 API key、Authorization header 或 Chat Completions URL。
 - 只有同时勾选 `Harness 生成 Agent` 和具体 kRepo 产物时，该 kRepo 产物才会发送给模型服务。
 - Linux 源码和 kRepo 来源代码不被修改。

@@ -183,17 +183,36 @@
             <button class="icon-button" id="close-model-settings" type="button" aria-label="关闭">×</button>
           </div>
           <label>
-            模型
-            <input name="model" placeholder="glm-5.1" required />
+            调用方式
+            <select name="llm_mode">
+              <option value="api">API</option>
+              <option value="opencode">opencode CLI</option>
+            </select>
           </label>
-          <label>
-            Chat Completions URL
-            <input name="chat_url" placeholder="https://your-provider.example/v1/chat/completions" required />
-          </label>
-          <label>
-            API Key
-            <input name="api_key" type="password" autocomplete="off" required />
-          </label>
+          <div class="model-api-fields">
+            <label>
+              模型
+              <input name="model" placeholder="glm-5.1" required />
+            </label>
+            <label>
+              Chat Completions URL
+              <input name="chat_url" placeholder="https://your-provider.example/v1/chat/completions" required />
+            </label>
+            <label>
+              API Key
+              <input name="api_key" type="password" autocomplete="off" required />
+            </label>
+          </div>
+          <div class="model-opencode-fields" hidden>
+            <label>
+              opencode CLI
+              <input name="opencode_executable" placeholder="opencode" />
+            </label>
+            <label>
+              opencode 模型
+              <input name="opencode_model" placeholder="留空使用 opencode 默认模型" />
+            </label>
+          </div>
           <div class="modal-footer">
             <span id="model-settings-status" class="inline-status"></span>
             <button class="button ghost" id="cancel-model-settings" type="button">取消</button>

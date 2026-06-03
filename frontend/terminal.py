@@ -25,6 +25,7 @@ from frontend.server import (
     _step_action_label,
     build_steps,
     default_config,
+    load_local_env,
 )
 
 
@@ -253,6 +254,7 @@ def parse_artifacts(value: str) -> list[str]:
 
 
 def terminal_default_config() -> dict[str, Any]:
+    load_local_env(PROJECT_ROOT / ".env.local")
     return default_config()
 
 
@@ -281,9 +283,31 @@ def config_from_args(args: argparse.Namespace, *, input_func=input, output: Text
     )
     config["function"] = prompt_text("函数名", str(args.function or config["function"]), input_func, stream, required=True)
     config["file"] = prompt_text("文件过滤", str(args.file or config["file"]), input_func, stream)
-    config["model"] = prompt_text("模型", str(args.model or config["model"]), input_func, stream)
-    config["chat_url"] = prompt_text("Chat Completions URL", str(args.chat_url or config["chat_url"]), input_func, stream)
-    config["api_key_env"] = prompt_text("API Key 环境变量", str(args.api_key_env or config["api_key_env"]), input_func, stream)
+    config["llm_mode"] = prompt_choice(
+        "LLM 调用方式",
+        str(args.llm_mode or config["llm_mode"]),
+        ["api", "opencode"],
+        input_func,
+        stream,
+    )
+    if config["llm_mode"] == "api":
+        config["model"] = prompt_text("模型", str(args.model or config["model"]), input_func, stream)
+        config["chat_url"] = prompt_text("Chat Completions URL", str(args.chat_url or config["chat_url"]), input_func, stream)
+        config["api_key_env"] = prompt_text("API Key 环境变量", str(args.api_key_env or config["api_key_env"]), input_func, stream)
+    else:
+        config["opencode_executable"] = prompt_text(
+            "opencode CLI",
+            str(args.opencode_executable or config["opencode_executable"]),
+            input_func,
+            stream,
+            required=True,
+        )
+        config["opencode_model"] = prompt_text(
+            "opencode 模型",
+            str(args.opencode_model or config["opencode_model"]),
+            input_func,
+            stream,
+        )
     config["model_timeout"] = prompt_int("模型超时秒数", args.model_timeout or config["model_timeout"], input_func, stream)
     config["model_max_retries"] = prompt_int("模型重试次数", args.model_max_retries or config["model_max_retries"], input_func, stream)
     config["clang"] = prompt_text("Clang 路径", str(args.clang or config["clang"]), input_func, stream)
@@ -313,9 +337,12 @@ def apply_args_to_config(config: dict[str, Any], args: argparse.Namespace) -> No
         "knowledge_dir": args.knowledge_dir,
         "function": args.function,
         "file": args.file,
+        "llm_mode": args.llm_mode,
         "model": args.model,
         "chat_url": args.chat_url,
         "api_key_env": args.api_key_env,
+        "opencode_executable": args.opencode_executable,
+        "opencode_model": args.opencode_model,
         "model_timeout": args.model_timeout,
         "model_max_retries": args.model_max_retries,
         "clang": args.clang,
@@ -402,9 +429,12 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--function")
     parser.add_argument("--file")
     parser.add_argument("--artifacts", help="逗号分隔的产物 id 或编号")
+    parser.add_argument("--llm-mode", choices=["api", "opencode"])
     parser.add_argument("--model")
     parser.add_argument("--chat-url")
     parser.add_argument("--api-key-env")
+    parser.add_argument("--opencode-executable")
+    parser.add_argument("--opencode-model")
     parser.add_argument("--model-timeout", type=int)
     parser.add_argument("--model-max-retries", type=int)
     parser.add_argument("--clang")

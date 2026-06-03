@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,8 +11,10 @@ from unittest import mock
 from agents.harness_generation.agent import (
     CompileResult,
     HarnessGenerationError,
+    PROJECT_ROOT,
     RunResult,
     append_llm_transcript,
+    build_opencode_command,
     build_context,
     build_prompt,
     build_repair_prompt,
@@ -103,6 +106,55 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertEqual(urlopen.call_count, 2)
         self.assertIn("第 1/2 次", text)
         self.assertIn("assistant", text)
+
+    def test_build_opencode_command_uses_repo_dir_and_model(self) -> None:
+        command = build_opencode_command(
+            executable="opencode",
+            repo=".",
+            prompt="生成 harness",
+            model="anthropic/claude-sonnet-4",
+        )
+
+        self.assertEqual(command[:4], ["opencode", "run", "--dir", str(PROJECT_ROOT)])
+        self.assertEqual(command[4:6], ["--model", "anthropic/claude-sonnet-4"])
+        self.assertEqual(command[-1], "生成 harness")
+
+    def test_request_harness_json_invokes_opencode_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "llm_transcript.md"
+            args = argparse.Namespace(
+                repo=".",
+                llm_mode="opencode",
+                opencode_executable="opencode",
+                opencode_model="anthropic/claude-sonnet-4",
+                model="",
+                timeout=300,
+                max_retries=0,
+            )
+            completed = subprocess.CompletedProcess(
+                ["opencode"],
+                0,
+                stdout='{"classification":"byte_parser","files":[]}',
+                stderr="",
+            )
+
+            with mock.patch("agents.harness_generation.agent.subprocess.run", return_value=completed) as run:
+                payload = request_harness_json(
+                    prompt="生成 harness",
+                    args=args,
+                    transcript_path=transcript,
+                    interaction="initial generation",
+                )
+
+            command = run.call_args.args[0]
+            text = transcript.read_text(encoding="utf-8")
+
+        self.assertEqual(payload["classification"], "byte_parser")
+        self.assertEqual(command[:4], ["opencode", "run", "--dir", str(PROJECT_ROOT)])
+        self.assertEqual(command[4:6], ["--model", "anthropic/claude-sonnet-4"])
+        self.assertEqual(command[-1], "生成 harness")
+        self.assertIn("anthropic/claude-sonnet-4", text)
+        self.assertIn('"classification":"byte_parser"', text)
 
     def test_parse_model_json_repairs_raw_newlines_inside_strings(self) -> None:
         content = '''```json
@@ -253,6 +305,42 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertEqual(payload["classification"], "skb_handler")
         self.assertFalse(second_body["stream"])
         self.assertIn("JSON retry", text)
+
+    def test_request_harness_json_uses_retry_budget_for_invalid_json_repairs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {"API_KEY": "secret"}):
+            transcript = Path(tmp) / "llm_transcript.md"
+            args = argparse.Namespace(
+                model="glm-5.1",
+                chat_url="https://example.invalid/v1",
+                api_key_env="API_KEY",
+                timeout=300,
+                max_retries=2,
+                no_stream=True,
+            )
+            malformed = self.FakeResponse(
+                '{"choices":[{"message":{"content":"{\\"classification\\":\\"skb_handler\\",\\"files\\":[{\\"path\\":\\"dict.txt\\",\\"content\\":\\"bad"}}]}'
+            )
+            malformed_repair = self.FakeResponse(
+                '{"choices":[{"message":{"content":"{\\"classification\\":\\"skb_handler\\",\\"files\\":[{\\"path\\":\\"dict.txt\\",\\"content\\":\\"still-bad"}}]}'
+            )
+            repaired = self.FakeResponse(
+                '{"choices":[{"message":{"content":"{\\"classification\\":\\"skb_handler\\",\\"files\\":[]}"}}]}'
+            )
+
+            with mock.patch("agents.harness_generation.agent.urllib.request.urlopen", side_effect=[malformed, malformed_repair, repaired]) as urlopen:
+                payload = request_harness_json(
+                    prompt="生成 harness",
+                    args=args,
+                    transcript_path=transcript,
+                    interaction="initial generation",
+                )
+
+            text = transcript.read_text(encoding="utf-8")
+
+        self.assertEqual(payload["classification"], "skb_handler")
+        self.assertEqual(urlopen.call_count, 3)
+        self.assertIn("initial generation JSON retry 1/2", text)
+        self.assertIn("initial generation JSON retry 2/2", text)
 
     def test_read_streaming_chat_response_joins_sse_chunks(self) -> None:
         response = self.FakeResponse(

@@ -347,9 +347,12 @@ def build_steps(config: dict[str, Any], task_dir: Path) -> list[PipelineStep]:
         if "params" in selected:
             command.extend(["--params", str(_artifact_output_path("params", function, task_dir))])
         _add_optional(command, "--file", config.get("file"))
+        _add_optional(command, "--llm-mode", config.get("llm_mode"))
         _add_optional(command, "--model", config.get("model"))
         _add_optional(command, "--chat-url", config.get("chat_url"))
         _add_optional(command, "--api-key-env", config.get("api_key_env"))
+        _add_optional(command, "--opencode-executable", config.get("opencode_executable"))
+        _add_optional(command, "--opencode-model", config.get("opencode_model"))
         _add_optional(command, "--timeout", config.get("model_timeout") or DEFAULT_MODEL_TIMEOUT)
         _add_optional(command, "--max-retries", config.get("model_max_retries") or DEFAULT_MODEL_MAX_RETRIES)
         _add_optional(command, "--clang", config.get("clang"))
@@ -369,6 +372,9 @@ def build_steps(config: dict[str, Any], task_dir: Path) -> list[PipelineStep]:
 
 
 def default_config() -> dict[str, Any]:
+    llm_mode = str(os.environ.get("LLM_MODE") or "api").strip().lower()
+    if llm_mode not in {"api", "opencode"}:
+        llm_mode = "api"
     return {
         "repo": _default_repo_path(),
         "db": "",
@@ -376,8 +382,12 @@ def default_config() -> dict[str, Any]:
         "function": "can_send",
         "file": "net/can/af_can.c",
         "artifacts": ["report_md", "report_json", "subsource", "calls", "params", HARNESS_AGENT_ARTIFACT],
-        "model": "glm-5.1",
-        "chat_url": "",
+        "llm_mode": llm_mode,
+        "model": os.environ.get("MODEL") or "glm-5.1",
+        "chat_url": os.environ.get("CHAT_COMPLETIONS_URL") or os.environ.get("API_BASE_URL") or os.environ.get("BASE_URL") or "",
+        "api_key_env": "API_KEY",
+        "opencode_executable": os.environ.get("OPENCODE_EXECUTABLE") or "opencode",
+        "opencode_model": os.environ.get("OPENCODE_MODEL") or "",
         "model_timeout": DEFAULT_MODEL_TIMEOUT,
         "model_max_retries": DEFAULT_MODEL_MAX_RETRIES,
         "clang": "",
@@ -578,23 +588,54 @@ def _reuse_step(name: str, output: Path, source: Path) -> PipelineStep:
 
 
 def save_model_settings_to_local_env(config: dict[str, Any]) -> dict[str, str]:
+    mode = str(config.get("llm_mode") or "api").strip().lower()
+    if mode not in {"api", "opencode"}:
+        raise ValueError("模型调用方式无效")
     model = str(config.get("model") or "").strip()
     chat_url = str(config.get("chat_url") or "").strip()
     api_key = str(config.get("api_key") or "").strip()
-    if not model:
-        raise ValueError("模型不能为空")
-    if not chat_url:
-        raise ValueError("Chat Completions URL 不能为空")
-    if not api_key:
-        raise ValueError("API Key 不能为空")
+    opencode_executable = str(config.get("opencode_executable") or "").strip()
+    opencode_model = str(config.get("opencode_model") or "").strip()
     env_path = PROJECT_ROOT / ".env.local"
-    write_env_value(env_path, "MODEL", model)
-    write_env_value(env_path, "CHAT_COMPLETIONS_URL", chat_url)
-    write_env_value(env_path, "API_KEY", api_key)
-    os.environ["MODEL"] = model
-    os.environ["CHAT_COMPLETIONS_URL"] = chat_url
-    os.environ["API_KEY"] = api_key
-    return {"status": "saved", "env_path": str(env_path)}
+    write_env_value(env_path, "LLM_MODE", mode)
+    os.environ["LLM_MODE"] = mode
+    if mode == "api":
+        if not model:
+            raise ValueError("模型不能为空")
+        if not chat_url:
+            raise ValueError("Chat Completions URL 不能为空")
+        if not api_key:
+            raise ValueError("API Key 不能为空")
+        write_env_value(env_path, "MODEL", model)
+        write_env_value(env_path, "CHAT_COMPLETIONS_URL", chat_url)
+        write_env_value(env_path, "API_KEY", api_key)
+        os.environ["MODEL"] = model
+        os.environ["CHAT_COMPLETIONS_URL"] = chat_url
+        os.environ["API_KEY"] = api_key
+    else:
+        if not opencode_executable:
+            raise ValueError("opencode 可执行文件不能为空")
+        write_env_value(env_path, "OPENCODE_EXECUTABLE", opencode_executable)
+        write_env_value(env_path, "OPENCODE_MODEL", opencode_model)
+        os.environ["OPENCODE_EXECUTABLE"] = opencode_executable
+        os.environ["OPENCODE_MODEL"] = opencode_model
+    return {"status": "saved", "mode": mode, "env_path": str(env_path)}
+
+
+def load_local_env(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped.removeprefix("export ").strip()
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
 def write_env_value(path: Path, key: str, value: str) -> None:
@@ -930,6 +971,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--open", action="store_true")
     args = parser.parse_args(argv)
+    load_local_env(PROJECT_ROOT / ".env.local")
     try:
         serve(args.host, args.port, args.open)
     except OSError as exc:

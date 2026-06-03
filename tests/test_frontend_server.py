@@ -58,13 +58,17 @@ class FrontendServerTest(unittest.TestCase):
             build_steps({"repo": "./linux-7.0", "function": "can_send", "artifacts": []}, Path("/tmp/axf-task"))
 
     def test_default_config_targets_knowledge_base_outputs(self) -> None:
-        defaults = default_config()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            defaults = default_config()
 
         self.assertEqual(defaults["function"], "can_send")
         self.assertIn(defaults["repo"], {"./linux-7.0", "../linux-7.0"})
         self.assertIn("report_json", defaults["artifacts"])
         self.assertIn("subsource", defaults["artifacts"])
         self.assertIn("harness_generation_agent", defaults["artifacts"])
+        self.assertEqual(defaults["llm_mode"], "api")
+        self.assertEqual(defaults["api_key_env"], "API_KEY")
+        self.assertEqual(defaults["opencode_executable"], "opencode")
         self.assertEqual(defaults["model_timeout"], 300)
         self.assertEqual(defaults["model_max_retries"], 2)
 
@@ -118,23 +122,54 @@ class FrontendServerTest(unittest.TestCase):
             with mock.patch("frontend.server.PROJECT_ROOT", root), mock.patch.dict(os.environ, {}, clear=True):
                 result = save_model_settings_to_local_env(
                     {
+                        "llm_mode": "api",
                         "model": "glm-5.1",
                         "chat_url": "https://example.invalid/v1/chat/completions",
                         "api_key": "sk-secret",
                     }
                 )
                 text = (root / ".env.local").read_text(encoding="utf-8")
+                mode_value = os.environ["LLM_MODE"]
                 model_value = os.environ["MODEL"]
                 chat_url_value = os.environ["CHAT_COMPLETIONS_URL"]
                 env_value = os.environ["API_KEY"]
 
         self.assertEqual(result["status"], "saved")
+        self.assertEqual(result["mode"], "api")
+        self.assertIn("LLM_MODE=api", text)
         self.assertIn("MODEL=glm-5.1", text)
         self.assertIn("CHAT_COMPLETIONS_URL=https://example.invalid/v1/chat/completions", text)
         self.assertIn("API_KEY=sk-secret", text)
+        self.assertEqual(mode_value, "api")
         self.assertEqual(model_value, "glm-5.1")
         self.assertEqual(chat_url_value, "https://example.invalid/v1/chat/completions")
         self.assertEqual(env_value, "sk-secret")
+
+    def test_save_model_settings_to_local_env_accepts_opencode_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("frontend.server.PROJECT_ROOT", root), mock.patch.dict(os.environ, {}, clear=True):
+                result = save_model_settings_to_local_env(
+                    {
+                        "llm_mode": "opencode",
+                        "opencode_executable": "opencode",
+                        "opencode_model": "anthropic/claude-sonnet-4",
+                    }
+                )
+                text = (root / ".env.local").read_text(encoding="utf-8")
+                mode_value = os.environ["LLM_MODE"]
+                executable_value = os.environ["OPENCODE_EXECUTABLE"]
+                model_value = os.environ["OPENCODE_MODEL"]
+
+        self.assertEqual(result["status"], "saved")
+        self.assertEqual(result["mode"], "opencode")
+        self.assertIn("LLM_MODE=opencode", text)
+        self.assertIn("OPENCODE_EXECUTABLE=opencode", text)
+        self.assertIn("OPENCODE_MODEL=anthropic/claude-sonnet-4", text)
+        self.assertNotIn("API_KEY=", text)
+        self.assertEqual(mode_value, "opencode")
+        self.assertEqual(executable_value, "opencode")
+        self.assertEqual(model_value, "anthropic/claude-sonnet-4")
 
     def test_empty_artifact_selection_does_not_fall_back_to_defaults(self) -> None:
         self.assertEqual(_selected_artifacts({"artifacts": []}), set())

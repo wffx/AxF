@@ -119,9 +119,12 @@ function applyDefaults(defaults) {
   setField("knowledge_dir", defaults.knowledge_dir);
   setField("function", defaults.function);
   setField("file", defaults.file);
+  setModelSettingsField("llm_mode", defaults.llm_mode || "api");
   setModelSettingsField("model", defaults.model);
   setModelSettingsField("chat_url", defaults.chat_url);
   setModelSettingsField("api_key", "");
+  setModelSettingsField("opencode_executable", defaults.opencode_executable || "opencode");
+  setModelSettingsField("opencode_model", defaults.opencode_model || "");
   setField("model_timeout", defaults.model_timeout);
   setField("model_max_retries", defaults.model_max_retries);
   setField("clang", defaults.clang);
@@ -138,6 +141,7 @@ function applyDefaults(defaults) {
   for (const input of form.querySelectorAll('input[name="artifacts"]')) {
     input.checked = selected.has(input.value);
   }
+  syncModelSettingsMode();
   syncArtifactNotes();
 }
 
@@ -160,10 +164,35 @@ function readConfig() {
   return config;
 }
 
+function modelSettingsMode() {
+  return modelSettingsForm.elements.llm_mode.value || "api";
+}
+
+function syncModelSettingsMode() {
+  const mode = modelSettingsMode();
+  const apiFields = modelSettingsForm.querySelector(".model-api-fields");
+  const opencodeFields = modelSettingsForm.querySelector(".model-opencode-fields");
+  const apiMode = mode === "api";
+  apiFields.hidden = !apiMode;
+  opencodeFields.hidden = apiMode;
+  for (const input of apiFields.querySelectorAll("input, select")) {
+    input.disabled = !apiMode;
+    input.required = apiMode;
+  }
+  for (const input of opencodeFields.querySelectorAll("input, select")) {
+    input.disabled = apiMode;
+    input.required = !apiMode && input.name === "opencode_executable";
+  }
+}
+
 function openModelSettings() {
   modelSettingsStatus.textContent = "";
   modelSettingsModal.hidden = false;
-  modelSettingsForm.elements.model.focus();
+  syncModelSettingsMode();
+  const focusTarget = modelSettingsMode() === "opencode"
+    ? modelSettingsForm.elements.opencode_executable
+    : modelSettingsForm.elements.model;
+  focusTarget.focus();
 }
 
 function closeModelSettings() {
@@ -172,11 +201,18 @@ function closeModelSettings() {
 
 async function saveModelSettings(event) {
   event.preventDefault();
+  const llmMode = modelSettingsMode();
   const model = modelSettingsForm.elements.model.value.trim();
   const chatUrl = modelSettingsForm.elements.chat_url.value.trim();
   const apiKey = modelSettingsForm.elements.api_key.value.trim();
-  if (!model || !chatUrl || !apiKey) {
+  const opencodeExecutable = modelSettingsForm.elements.opencode_executable.value.trim();
+  const opencodeModel = modelSettingsForm.elements.opencode_model.value.trim();
+  if (llmMode === "api" && (!model || !chatUrl || !apiKey)) {
     modelSettingsStatus.textContent = "请填写模型、URL 和 API Key。";
+    return;
+  }
+  if (llmMode === "opencode" && !opencodeExecutable) {
+    modelSettingsStatus.textContent = "请填写 opencode CLI。";
     return;
   }
   saveModelSettingsButton.disabled = true;
@@ -184,9 +220,16 @@ async function saveModelSettings(event) {
   try {
     const result = await api("/api/settings/model", {
       method: "POST",
-      body: JSON.stringify({ model, chat_url: chatUrl, api_key: apiKey }),
+      body: JSON.stringify({
+        llm_mode: llmMode,
+        model,
+        chat_url: chatUrl,
+        api_key: apiKey,
+        opencode_executable: opencodeExecutable,
+        opencode_model: opencodeModel,
+      }),
     });
-    modelSettingsStatus.textContent = `已保存到 ${result.env_path}`;
+    modelSettingsStatus.textContent = `${result.mode} 已保存到 ${result.env_path}`;
   } catch (error) {
     modelSettingsStatus.textContent = `保存失败: ${error.message}`;
   } finally {
@@ -673,6 +716,7 @@ modelSettingsModal.addEventListener("click", (event) => {
     closeModelSettings();
   }
 });
+modelSettingsForm.elements.llm_mode.addEventListener("change", syncModelSettingsMode);
 modelSettingsForm.addEventListener("submit", saveModelSettings);
 
 for (const tab of document.querySelectorAll(".tab")) {

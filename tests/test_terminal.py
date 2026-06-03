@@ -48,6 +48,12 @@ class TerminalTest(unittest.TestCase):
                 "net/can/af_can.c",
                 "--artifacts",
                 "report_json,params,harness_generation_agent",
+                "--llm-mode",
+                "opencode",
+                "--opencode-executable",
+                "opencode",
+                "--opencode-model",
+                "anthropic/claude-sonnet-4",
                 "--model",
                 "glm-5.1",
                 "--clang-mode",
@@ -60,6 +66,9 @@ class TerminalTest(unittest.TestCase):
         config = config_from_args(args, output=io.StringIO())
 
         self.assertEqual(config["artifacts"], ["report_json", "params", HARNESS_AGENT_ARTIFACT])
+        self.assertEqual(config["llm_mode"], "opencode")
+        self.assertEqual(config["opencode_executable"], "opencode")
+        self.assertEqual(config["opencode_model"], "anthropic/claude-sonnet-4")
         self.assertEqual(config["model"], "glm-5.1")
         self.assertEqual(config["clang_mode"], "wsl")
         self.assertEqual(config["file"], "net/can/af_can.c")
