@@ -38,6 +38,11 @@ DEFAULT_MAX_REPAIR_ROUNDS = 3
 DEFAULT_RUN_SECONDS = 10
 DEFAULT_MODEL_TIMEOUT = 300
 DEFAULT_LLM_MAX_RETRIES = 2
+MAX_DIRECT_CLI_PROMPT_CHARS = 8_000
+OPENCODE_PROMPT_FILE_MESSAGE = (
+    "请读取本次命令通过 --file 附加的 prompt 文件，并严格按照文件中的要求完成任务。"
+    "只输出一个可被 json.loads 解析的 JSON 对象，不要输出 Markdown 或解释。"
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -427,6 +432,12 @@ def request_harness_json_with_opencode(
     for request_attempt in range(1, max_retries + 2):
         attempt_label = interaction_label(interaction or tool, request_attempt, max_retries)
         log_llm_interaction("request", attempt_label, transcript_path)
+        prompt_file = prepare_cli_prompt_file(
+            tool=tool,
+            prompt=current_prompt,
+            transcript_path=transcript_path,
+            request_attempt=request_attempt,
+        )
         try:
             command = build_opencode_command(
                 tool=tool,
@@ -434,6 +445,7 @@ def request_harness_json_with_opencode(
                 repo=args.repo,
                 prompt=current_prompt,
                 model=model,
+                prompt_file=prompt_file,
             )
         except FileNotFoundError as exc:
             error = str(exc)
@@ -509,7 +521,15 @@ def normalize_ai_cli_tool(tool: str, executable: str = "") -> str:
     return DEFAULT_OPENCODE_TOOL
 
 
-def build_opencode_command(*, tool: str = "", executable: str, repo: str, prompt: str, model: str = "") -> list[str]:
+def build_opencode_command(
+    *,
+    tool: str = "",
+    executable: str,
+    repo: str,
+    prompt: str,
+    model: str = "",
+    prompt_file: Path | None = None,
+) -> list[str]:
     selected_tool = normalize_ai_cli_tool(tool, executable)
     resolved_executable = resolve_cli_executable(selected_tool, executable)
     return build_cli_command(
@@ -518,16 +538,29 @@ def build_opencode_command(*, tool: str = "", executable: str, repo: str, prompt
         repo=repo,
         prompt=prompt,
         model=model,
+        prompt_file=prompt_file,
     )
 
 
-def build_cli_command(*, tool: str, executable: str, repo: str, prompt: str, model: str = "") -> list[str]:
+def build_cli_command(
+    *,
+    tool: str,
+    executable: str,
+    repo: str,
+    prompt: str,
+    model: str = "",
+    prompt_file: Path | None = None,
+) -> list[str]:
     if tool in {"nga", "opencode"}:
         repo_dir = resolve_repo_dir(repo)
         command = [executable, "run", "--dir", str(repo_dir)]
         if model:
             command.extend(["--model", model])
-        command.append(prompt)
+        if prompt_file:
+            command.extend(["--file", str(prompt_file)])
+            command.append(OPENCODE_PROMPT_FILE_MESSAGE)
+        else:
+            command.append(prompt)
         return command
 
     if tool == "claude":
@@ -545,6 +578,27 @@ def build_cli_command(*, tool: str, executable: str, repo: str, prompt: str, mod
         return command
 
     raise HarnessGenerationError(f"未知 AI CLI 工具：{tool}")
+
+
+def prepare_cli_prompt_file(
+    *,
+    tool: str,
+    prompt: str,
+    transcript_path: Path | None,
+    request_attempt: int,
+) -> Path | None:
+    if tool not in {"nga", "opencode"}:
+        return None
+    if len(prompt) <= MAX_DIRECT_CLI_PROMPT_CHARS:
+        return None
+    if transcript_path:
+        prompt_dir = transcript_path.parent
+    else:
+        prompt_dir = PROJECT_ROOT / "workspace" / "llm_prompts"
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    prompt_path = prompt_dir / f"opencode_prompt_{request_attempt}.txt"
+    prompt_path.write_text(prompt, encoding="utf-8")
+    return prompt_path
 
 
 def resolve_cli_executable(tool: str, executable: str = "") -> str:

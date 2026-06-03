@@ -183,6 +183,47 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertIn("anthropic/claude-sonnet-4", text)
         self.assertIn('"classification":"byte_parser"', text)
 
+    def test_request_harness_json_uses_file_for_long_opencode_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "llm_transcript.md"
+            args = argparse.Namespace(
+                repo=".",
+                llm_mode="opencode",
+                opencode_tool="nga",
+                opencode_executable="nga",
+                opencode_model="",
+                model="",
+                timeout=300,
+                max_retries=0,
+            )
+            completed = subprocess.CompletedProcess(
+                ["opencode"],
+                0,
+                stdout='{"classification":"byte_parser","files":[]}',
+                stderr="",
+            )
+            prompt = "生成 harness\n" + ("x" * 9000)
+
+            with (
+                mock.patch("agents.harness_generation.agent.shutil.which", return_value="nga"),
+                mock.patch("agents.harness_generation.agent.subprocess.run", return_value=completed) as run,
+            ):
+                payload = request_harness_json(
+                    prompt=prompt,
+                    args=args,
+                    transcript_path=transcript,
+                    interaction="initial generation",
+                )
+
+            command = run.call_args.args[0]
+            prompt_file = Path(command[command.index("--file") + 1])
+            prompt_file_text = prompt_file.read_text(encoding="utf-8")
+
+        self.assertEqual(payload["classification"], "byte_parser")
+        self.assertIn("--file", command)
+        self.assertNotIn(prompt, command)
+        self.assertEqual(prompt_file_text, prompt)
+
     def test_parse_model_json_repairs_raw_newlines_inside_strings(self) -> None:
         content = '''```json
 {
