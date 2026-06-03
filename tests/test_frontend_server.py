@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 from agents.harness_generation.agent import parse_model_json
 from frontend.server import (
@@ -16,6 +17,8 @@ from frontend.server import (
     _harness_failure_message_for_step,
     _harness_events_for_step,
     _harness_summary,
+    _runtime_env_from_config,
+    _sanitize_task_config,
     _selected_artifacts,
 )
 
@@ -61,8 +64,45 @@ class FrontendServerTest(unittest.TestCase):
         self.assertIn("subsource", defaults["artifacts"])
         self.assertIn("harness_generation_agent", defaults["artifacts"])
         self.assertEqual(defaults["api_key_env"], "API_KEY")
+        self.assertEqual(defaults["api_key"], "")
         self.assertEqual(defaults["model_timeout"], 300)
         self.assertEqual(defaults["model_max_retries"], 2)
+
+    def test_direct_api_key_is_runtime_only(self) -> None:
+        config = {
+            "repo": "./linux-7.0",
+            "function": "can_send",
+            "artifacts": ["harness_generation_agent"],
+            "api_key_env": "API_KEY",
+            "api_key": "sk-secret",
+        }
+
+        safe = _sanitize_task_config(config)
+        runtime_env = _runtime_env_from_config(config)
+
+        self.assertNotIn("api_key", safe)
+        self.assertTrue(safe["api_key_provided"])
+        self.assertEqual(runtime_env, {"API_KEY": "sk-secret"})
+
+    def test_task_store_redacts_direct_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TaskStore(Path(tmp))
+            config = {
+                "repo": "./linux-7.0",
+                "function": "can_send",
+                "artifacts": ["report_json"],
+                "api_key_env": "API_KEY",
+                "api_key": "sk-secret",
+            }
+
+            with mock.patch("frontend.server.build_steps", return_value=[]), mock.patch("frontend.server.threading.Thread"):
+                task = store.create(config)
+
+            task_json = task.to_json()
+
+        self.assertNotIn("api_key", task_json["config"])
+        self.assertTrue(task_json["config"]["api_key_provided"])
+        self.assertEqual(task.runtime_env, {"API_KEY": "sk-secret"})
 
     def test_empty_artifact_selection_does_not_fall_back_to_defaults(self) -> None:
         self.assertEqual(_selected_artifacts({"artifacts": []}), set())

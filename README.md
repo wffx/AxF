@@ -46,6 +46,8 @@ MODEL=glm-5.1
 
 Agent 会自动补 `/chat/completions`。模型请求默认使用流式 Chat Completions；如果要临时排查非流式兼容性，可以在命令行 Agent 中加 `--no-stream`。
 
+开发调试时，也可以在 Web 前端的 `API Key（临时）` 字段直接填 key。后端只会把它注入当前 Harness Agent 子进程环境变量，不写入 `task.json`、命令日志或 LLM 交互记录。正式上线前建议移除这个字段，继续使用 `.env.local` 或系统环境变量。
+
 启动前端：
 
 ```bash

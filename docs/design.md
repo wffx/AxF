@@ -235,7 +235,7 @@ params      -> params.txt
 : 配置源码根目录、可选 `BROWSE.VC.DB`、可选复用知识库目录、函数名和文件过滤。文件过滤用于解决同名函数问题，例如 `net/can/af_can.c`。
 
 `LLM 生成`
-: 配置模型名、Chat Completions URL、API key 环境变量名、模型超时秒数、模型重试次数、clang 路径、clang 模式、最大修复轮数和编译超时秒数。API key 的值不在前端输入，只通过 `.env.local` 或环境变量读取。
+: 配置模型名、Chat Completions URL、API key 环境变量名、可选临时 API key、模型超时秒数、模型重试次数、clang 路径、clang 模式、最大修复轮数和编译超时秒数。临时 API key 只注入当前 Agent 子进程环境变量，不写入 `task.json`。
 
 `kRepo 知识抽取`
 : 只包含 kRepo/AxF 知识产物选择，例如 Markdown 报告、JSON 报告、下游源码包、上层调用链和入参约束。这里不再混入 Harness Agent。
@@ -490,12 +490,13 @@ LLM 配置在前端中以 `LLM 生成` 区域呈现，含义如下：
 ```text
 模型              -> --model，也可来自 MODEL
 Chat Completions URL -> --chat-url，也可来自 CHAT_COMPLETIONS_URL/API_BASE_URL/BASE_URL
-API Key 环境变量  -> --api-key-env，默认 API_KEY
+API Key 环境变量名 -> --api-key-env，默认 API_KEY
+API Key（临时）   -> 不作为命令行参数；后端把它注入子进程环境变量
 模型超时秒数      -> --timeout，默认 300
 模型重试次数      -> --max-retries，默认 2
 ```
 
-这里参考 OpenDeepHole 一类工具把模型连接参数收敛到一个配置区，但 AxF 不直接在前端保存 API key 值，只保存环境变量名。这样 `.env.local` 可以留在本地并被 `.gitignore` 忽略。
+这里参考 OpenDeepHole 一类工具把模型连接参数收敛到一个配置区。AxF 默认仍推荐只保存环境变量名，让 `.env.local` 留在本地并被 `.gitignore` 忽略；开发调试时可以在前端临时填写 API key，后端会在创建任务时把真实值从持久化配置中移除，只保留 `api_key_provided: true` 标记。
 
 模型请求默认使用 OpenAI-compatible Chat Completions 的流式响应，即请求体包含 `"stream": true`，并按 SSE `data:` chunk 拼接 `choices[].delta.content`。这对 harness 修复轮很重要：修复轮输出可能较长，非流式调用必须等完整响应结束才返回，容易触发 read timeout。需要排查服务端兼容性时，可在命令行加 `--no-stream` 临时退回非流式。
 
@@ -913,6 +914,7 @@ Clang 路径: /usr/bin/clang
 - `.env.local` 被 `.gitignore` 忽略。
 - 不打印 API key。
 - 任务日志记录命令参数，但不记录 `Authorization` header。
+- 前端临时填写的 API key 不写入 `task.json`、`events.jsonl`、`task.log` 或 `llm_transcript.md`，只注入当前 Agent 子进程环境变量。
 - `llm_transcript.md` 记录 prompt 和模型回复，但不记录 API key、Authorization header 或 Chat Completions URL。
 - 只有同时勾选 `Harness 生成 Agent` 和具体 kRepo 产物时，该 kRepo 产物才会发送给模型服务。
 - Linux 源码和 kRepo 来源代码不被修改。

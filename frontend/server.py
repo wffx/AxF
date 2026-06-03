@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -57,6 +58,7 @@ class Task:
     process: subprocess.Popen[str] | None = None
     cancel_requested: bool = False
     error: str | None = None
+    runtime_env: dict[str, str] = field(default_factory=dict, repr=False)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -92,15 +94,17 @@ class TaskStore:
         task_id = uuid.uuid4().hex[:12]
         task_dir = self.workspace / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
+        safe_config = _sanitize_task_config(config)
+        runtime_env = _runtime_env_from_config(config)
         try:
-            build_steps(config, task_dir)
+            build_steps(safe_config, task_dir)
         except ValueError:
             try:
                 task_dir.rmdir()
             except OSError:
                 pass
             raise
-        task = Task(id=task_id, config=config, task_dir=task_dir)
+        task = Task(id=task_id, config=safe_config, task_dir=task_dir, runtime_env=runtime_env)
         with self._lock:
             self._tasks[task_id] = task
         threading.Thread(target=self._run_task, args=(task_id,), daemon=True).start()
@@ -233,6 +237,7 @@ class TaskStore:
             process = subprocess.Popen(
                 step.command,
                 cwd=PROJECT_ROOT,
+                env=self._step_env(task_id),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -255,6 +260,13 @@ class TaskStore:
         finally:
             if output_handle:
                 output_handle.close()
+
+    def _step_env(self, task_id: str) -> dict[str, str]:
+        env = os.environ.copy()
+        task = self.get(task_id)
+        if task:
+            env.update(task.runtime_env)
+        return env
 
 
 def build_steps(config: dict[str, Any], task_dir: Path) -> list[PipelineStep]:
@@ -371,6 +383,7 @@ def default_config() -> dict[str, Any]:
         "model": "glm-5.1",
         "chat_url": "",
         "api_key_env": "API_KEY",
+        "api_key": "",
         "model_timeout": DEFAULT_MODEL_TIMEOUT,
         "model_max_retries": DEFAULT_MODEL_MAX_RETRIES,
         "clang": "",
@@ -560,6 +573,22 @@ def _reuse_step(name: str, output: Path, source: Path) -> PipelineStep:
         capture_stdout=False,
         reuse_from=source,
     )
+
+
+def _runtime_env_from_config(config: dict[str, Any]) -> dict[str, str]:
+    direct_key = str(config.get("api_key") or "").strip()
+    if not direct_key:
+        return {}
+    env_name = str(config.get("api_key_env") or "API_KEY").strip() or "API_KEY"
+    return {env_name: direct_key}
+
+
+def _sanitize_task_config(config: dict[str, Any]) -> dict[str, Any]:
+    safe = dict(config)
+    direct_key = str(safe.pop("api_key", "") or "").strip()
+    if direct_key:
+        safe["api_key_provided"] = True
+    return safe
 
 
 def _knowledge_reuse_path(config: dict[str, Any], artifact_name: str, function: str) -> Path | None:

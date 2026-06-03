@@ -115,6 +115,7 @@ function applyDefaults(defaults) {
   setField("model", defaults.model);
   setField("chat_url", defaults.chat_url);
   setField("api_key_env", defaults.api_key_env);
+  setField("api_key", "");
   setField("model_timeout", defaults.model_timeout);
   setField("model_max_retries", defaults.model_max_retries);
   setField("clang", defaults.clang);
