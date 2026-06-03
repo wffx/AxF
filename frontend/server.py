@@ -351,6 +351,7 @@ def build_steps(config: dict[str, Any], task_dir: Path) -> list[PipelineStep]:
         _add_optional(command, "--model", config.get("model"))
         _add_optional(command, "--chat-url", config.get("chat_url"))
         _add_optional(command, "--api-key-env", config.get("api_key_env"))
+        _add_optional(command, "--opencode-tool", config.get("opencode_tool"))
         _add_optional(command, "--opencode-executable", config.get("opencode_executable"))
         _add_optional(command, "--opencode-model", config.get("opencode_model"))
         _add_optional(command, "--timeout", config.get("model_timeout") or DEFAULT_MODEL_TIMEOUT)
@@ -386,7 +387,8 @@ def default_config() -> dict[str, Any]:
         "model": os.environ.get("MODEL") or "glm-5.1",
         "chat_url": os.environ.get("CHAT_COMPLETIONS_URL") or os.environ.get("API_BASE_URL") or os.environ.get("BASE_URL") or "",
         "api_key_env": "API_KEY",
-        "opencode_executable": os.environ.get("OPENCODE_EXECUTABLE") or "opencode",
+        "opencode_tool": os.environ.get("OPENCODE_TOOL") or "nga",
+        "opencode_executable": os.environ.get("OPENCODE_EXECUTABLE") or "nga",
         "opencode_model": os.environ.get("OPENCODE_MODEL") or "",
         "model_timeout": DEFAULT_MODEL_TIMEOUT,
         "model_max_retries": DEFAULT_MODEL_MAX_RETRIES,
@@ -594,6 +596,7 @@ def save_model_settings_to_local_env(config: dict[str, Any]) -> dict[str, str]:
     model = str(config.get("model") or "").strip()
     chat_url = str(config.get("chat_url") or "").strip()
     api_key = str(config.get("api_key") or "").strip()
+    opencode_tool = str(config.get("opencode_tool") or "nga").strip().lower()
     opencode_executable = str(config.get("opencode_executable") or "").strip()
     opencode_model = str(config.get("opencode_model") or "").strip()
     env_path = PROJECT_ROOT / ".env.local"
@@ -613,10 +616,14 @@ def save_model_settings_to_local_env(config: dict[str, Any]) -> dict[str, str]:
         os.environ["CHAT_COMPLETIONS_URL"] = chat_url
         os.environ["API_KEY"] = api_key
     else:
+        if opencode_tool not in {"nga", "opencode", "hac", "claude"}:
+            raise ValueError("CLI 工具无效")
         if not opencode_executable:
-            raise ValueError("opencode 可执行文件不能为空")
+            raise ValueError("CLI executable 不能为空")
+        write_env_value(env_path, "OPENCODE_TOOL", opencode_tool)
         write_env_value(env_path, "OPENCODE_EXECUTABLE", opencode_executable)
         write_env_value(env_path, "OPENCODE_MODEL", opencode_model)
+        os.environ["OPENCODE_TOOL"] = opencode_tool
         os.environ["OPENCODE_EXECUTABLE"] = opencode_executable
         os.environ["OPENCODE_MODEL"] = opencode_model
     return {"status": "saved", "mode": mode, "env_path": str(env_path)}

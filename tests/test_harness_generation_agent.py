@@ -108,35 +108,39 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertIn("第 1/2 次", text)
         self.assertIn("assistant", text)
 
-    def test_build_opencode_command_uses_repo_dir_and_model(self) -> None:
-        command = build_opencode_command(
-            executable="opencode",
-            repo=".",
-            prompt="生成 harness",
-            model="anthropic/claude-sonnet-4",
-        )
+    def test_build_opencode_command_uses_nga_run_dir_and_model(self) -> None:
+        with mock.patch("agents.harness_generation.agent.shutil.which", return_value="nga"):
+            command = build_opencode_command(
+                tool="nga",
+                executable="nga",
+                repo=".",
+                prompt="生成 harness",
+                model="anthropic/claude-sonnet-4",
+            )
 
-        self.assertEqual(command[:4], ["opencode", "run", "--dir", str(PROJECT_ROOT)])
+        self.assertEqual(command[:4], ["nga", "run", "--dir", str(PROJECT_ROOT)])
         self.assertEqual(command[4:6], ["--model", "anthropic/claude-sonnet-4"])
         self.assertEqual(command[-1], "生成 harness")
 
-    def test_resolve_cli_executable_uses_windows_shell_lookup(self) -> None:
-        completed = subprocess.CompletedProcess(
-            ["cmd", "/d", "/c", 'where "nga"'],
-            0,
-            stdout="C:\\Users\\yufei\\scoop\\shims\\nga.cmd\n",
-            stderr="",
-        )
-
+    def test_resolve_cli_executable_requires_windows_path_or_path_entry(self) -> None:
         with (
-            mock.patch("agents.harness_generation.agent.os.name", "nt"),
+            mock.patch("agents.harness_generation.agent.sys.platform", "win32"),
             mock.patch("agents.harness_generation.agent.shutil.which", return_value=None),
-            mock.patch("agents.harness_generation.agent.subprocess.run", return_value=completed) as run,
         ):
-            resolved = resolve_cli_executable("nga")
+            with self.assertRaisesRegex(FileNotFoundError, "C:/tools/nga.cmd"):
+                resolve_cli_executable("nga", "nga")
 
-        self.assertEqual(resolved, "C:\\Users\\yufei\\scoop\\shims\\nga.cmd")
-        self.assertEqual(run.call_args.args[0][:3], ["cmd", "/d", "/c"])
+    def test_build_opencode_command_supports_claude_cli_shape(self) -> None:
+        with mock.patch("agents.harness_generation.agent.shutil.which", return_value="claude"):
+            command = build_opencode_command(
+                tool="claude",
+                executable="claude",
+                repo=".",
+                prompt="生成 harness",
+                model="sonnet",
+            )
+
+        self.assertEqual(command, ["claude", "-p", "--model", "sonnet", "生成 harness"])
 
     def test_request_harness_json_invokes_opencode_cli(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -144,7 +148,8 @@ class HarnessGenerationAgentTest(unittest.TestCase):
             args = argparse.Namespace(
                 repo=".",
                 llm_mode="opencode",
-                opencode_executable="opencode",
+                opencode_tool="nga",
+                opencode_executable="nga",
                 opencode_model="anthropic/claude-sonnet-4",
                 model="",
                 timeout=300,
@@ -157,7 +162,10 @@ class HarnessGenerationAgentTest(unittest.TestCase):
                 stderr="",
             )
 
-            with mock.patch("agents.harness_generation.agent.subprocess.run", return_value=completed) as run:
+            with (
+                mock.patch("agents.harness_generation.agent.shutil.which", return_value="nga"),
+                mock.patch("agents.harness_generation.agent.subprocess.run", return_value=completed) as run,
+            ):
                 payload = request_harness_json(
                     prompt="生成 harness",
                     args=args,
@@ -169,7 +177,7 @@ class HarnessGenerationAgentTest(unittest.TestCase):
             text = transcript.read_text(encoding="utf-8")
 
         self.assertEqual(payload["classification"], "byte_parser")
-        self.assertEqual(command[:4], ["opencode", "run", "--dir", str(PROJECT_ROOT)])
+        self.assertEqual(command[:4], ["nga", "run", "--dir", str(PROJECT_ROOT)])
         self.assertEqual(command[4:6], ["--model", "anthropic/claude-sonnet-4"])
         self.assertEqual(command[-1], "生成 harness")
         self.assertIn("anthropic/claude-sonnet-4", text)

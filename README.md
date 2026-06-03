@@ -52,13 +52,14 @@ Agent 会自动补 `/chat/completions`。模型请求默认使用流式 Chat Com
 
 ```bash
 LLM_MODE=opencode
-OPENCODE_EXECUTABLE=opencode
+OPENCODE_TOOL=nga
+OPENCODE_EXECUTABLE=nga
 OPENCODE_MODEL=anthropic/claude-sonnet-4
 ```
 
-`OPENCODE_MODEL` 可留空，留空时使用 opencode 自己的默认模型。Agent 会按 `opencode run --dir <源码根目录> --model <模型> <prompt>` 调用 CLI。
+`OPENCODE_TOOL` 可选 `nga`、`opencode`、`hac`、`claude`。`OPENCODE_MODEL` 可留空，留空时使用 CLI 自己的默认模型。`nga` / `opencode` 会按 `nga run --dir <源码根目录> --model <模型> <prompt>` 这类方式调用。Windows 上如果 `nga` 不在前端服务进程的 `PATH` 中，按 OpenDeepHole 的方式把 `OPENCODE_EXECUTABLE` 填成完整路径，例如 `C:/tools/nga.cmd`。
 
-Web 前端顶部的 `模型设置` 按钮会打开配置弹窗。API 模式填写模型、Chat Completions URL 和 API Key；opencode 模式填写 CLI 路径和可选模型。保存后会更新仓库根目录的 `.env.local` 并同步到当前前端 server 进程环境变量；密钥不会写入任务配置、命令日志或 LLM 交互记录。
+Web 前端顶部的 `模型设置` 按钮会打开配置弹窗。API 模式填写模型、Chat Completions URL 和 API Key；CLI 模式填写工具、executable 和可选模型。保存后会更新仓库根目录的 `.env.local` 并同步到当前前端 server 进程环境变量；密钥不会写入任务配置、命令日志或 LLM 交互记录。
 
 启动前端：
 
@@ -108,7 +109,8 @@ python -m frontend.terminal run \
   --file net/can/af_can.c \
   --artifacts report_json,params,harness_generation_agent \
   --llm-mode opencode \
-  --opencode-executable opencode \
+  --opencode-tool nga \
+  --opencode-executable nga \
   --opencode-model anthropic/claude-sonnet-4
 ```
 

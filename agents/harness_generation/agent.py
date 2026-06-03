@@ -20,7 +20,14 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = "glm-5.1"
 DEFAULT_LLM_MODE = "api"
-DEFAULT_OPENCODE_EXECUTABLE = "opencode"
+AI_CLI_TOOLS = ("nga", "opencode", "hac", "claude")
+DEFAULT_OPENCODE_TOOL = "nga"
+DEFAULT_CLI_EXECUTABLES = {
+    "nga": "nga",
+    "opencode": "opencode",
+    "hac": "hac",
+    "claude": "claude",
+}
 MAX_REPORT_CHARS = 50_000
 MAX_SOURCE_CHARS = 90_000
 MAX_TEXT_CHARS = 24_000
@@ -102,8 +109,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--chat-url", default="")
     parser.add_argument("--api-key-env", default="API_KEY")
     parser.add_argument("--llm-mode", choices=["api", "opencode"], default="")
-    parser.add_argument("--opencode-executable", default="", help="opencode CLI executable path or name")
-    parser.add_argument("--opencode-model", default="", help="model passed to opencode CLI; empty uses opencode default")
+    parser.add_argument("--opencode-tool", choices=AI_CLI_TOOLS, default="", help="AI CLI tool: nga, opencode, hac, or claude")
+    parser.add_argument("--opencode-executable", default="", help="AI CLI executable path or name; Windows can use C:/tools/nga.cmd")
+    parser.add_argument("--opencode-model", default="", help="model passed to AI CLI; empty uses CLI default")
     parser.add_argument("--timeout", type=int, default=DEFAULT_MODEL_TIMEOUT)
     parser.add_argument("--max-retries", type=int, default=DEFAULT_LLM_MAX_RETRIES)
     parser.add_argument("--no-stream", action="store_true", help="disable streaming Chat Completions responses")
@@ -386,10 +394,16 @@ def request_harness_json_with_opencode(
     transcript_path: Path | None = None,
     interaction: str = "",
 ) -> dict[str, Any]:
+    tool = normalize_ai_cli_tool(
+        getattr(args, "opencode_tool", "")
+        or os.environ.get("OPENCODE_TOOL")
+        or "",
+        getattr(args, "opencode_executable", "") or os.environ.get("OPENCODE_EXECUTABLE") or "",
+    )
     executable = (
         getattr(args, "opencode_executable", "")
         or os.environ.get("OPENCODE_EXECUTABLE")
-        or DEFAULT_OPENCODE_EXECUTABLE
+        or DEFAULT_CLI_EXECUTABLES[tool]
     )
     model = (
         getattr(args, "opencode_model", "")
@@ -411,14 +425,20 @@ def request_harness_json_with_opencode(
     current_prompt = prompt
     raw = ""
     for request_attempt in range(1, max_retries + 2):
-        attempt_label = interaction_label(interaction or "opencode", request_attempt, max_retries)
+        attempt_label = interaction_label(interaction or tool, request_attempt, max_retries)
         log_llm_interaction("request", attempt_label, transcript_path)
-        command = build_opencode_command(
-            executable=executable,
-            repo=args.repo,
-            prompt=current_prompt,
-            model=model,
-        )
+        try:
+            command = build_opencode_command(
+                tool=tool,
+                executable=executable,
+                repo=args.repo,
+                prompt=current_prompt,
+                model=model,
+            )
+        except FileNotFoundError as exc:
+            error = str(exc)
+            append_llm_transcript(transcript_path, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, error=error)
+            raise HarnessGenerationError(error) from exc
         try:
             completed = subprocess.run(
                 command,
@@ -431,33 +451,32 @@ def request_harness_json_with_opencode(
             )
         except subprocess.TimeoutExpired as exc:
             raw = (exc.stdout or "") + (exc.stderr or "")
-            error = f"opencode CLI 超时（{timeout} 秒，第 {request_attempt}/{max_retries + 1} 次）"
-            append_llm_transcript(transcript_path, interaction=attempt_label, model=model or "opencode-default", messages=messages, assistant=raw, error=error)
+            error = f"{tool} CLI 超时（{timeout} 秒，第 {request_attempt}/{max_retries + 1} 次）"
+            append_llm_transcript(transcript_path, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, assistant=raw, error=error)
             if request_attempt <= max_retries:
                 log_llm_retry(error, request_attempt, max_retries)
                 continue
             raise HarnessGenerationError(error) from exc
         except OSError as exc:
             error = (
-                f"opencode CLI 启动失败：{exc}。"
-                "如果命令在你的终端可用但前端任务不可用，请重启前端服务，"
-                "或在模型设置里填写 CLI 的绝对路径，例如 nga.exe/nga.cmd 的完整路径。"
+                f"{tool} CLI 启动失败：{exc}。"
+                "请检查模型设置中的 CLI executable；Windows 上建议填写完整路径，例如 C:/tools/nga.cmd。"
             )
-            append_llm_transcript(transcript_path, interaction=attempt_label, model=model or "opencode-default", messages=messages, error=error)
+            append_llm_transcript(transcript_path, interaction=attempt_label, model=model or f"{tool}-default", messages=messages, error=error)
             raise HarnessGenerationError(error) from exc
 
         raw = "\n".join(part for part in [completed.stdout, completed.stderr] if part).strip()
         append_llm_transcript(
             transcript_path,
             interaction=attempt_label,
-            model=model or "opencode-default",
+            model=model or f"{tool}-default",
             messages=messages,
             assistant=raw,
-            error="" if completed.returncode == 0 else f"opencode CLI 退出码：{completed.returncode}",
+            error="" if completed.returncode == 0 else f"{tool} CLI 退出码：{completed.returncode}",
         )
         log_llm_interaction("response", attempt_label, transcript_path)
         if completed.returncode != 0:
-            error = f"opencode CLI 退出码：{completed.returncode}；输出预览：{response_preview(raw)}"
+            error = f"{tool} CLI 退出码：{completed.returncode}；输出预览：{response_preview(raw)}"
             if request_attempt <= max_retries:
                 log_llm_retry(error, request_attempt, max_retries)
                 continue
@@ -468,115 +487,90 @@ def request_harness_json_with_opencode(
             if request_attempt <= max_retries:
                 current_prompt = (
                     prompt
-                    + "\n\n上一轮 opencode 输出不是合法 JSON，解析错误："
+                    + f"\n\n上一轮 {tool} 输出不是合法 JSON，解析错误："
                     + str(exc)
                     + "\n请重新输出一个完整、可被 json.loads 解析的 JSON 对象，不要输出 Markdown 或解释。"
                 )
                 messages = [messages[0], {"role": "user", "content": current_prompt}]
-                log_llm_retry(f"opencode 输出不是合法 JSON：{exc}", request_attempt, max_retries)
+                log_llm_retry(f"{tool} 输出不是合法 JSON：{exc}", request_attempt, max_retries)
                 continue
-            raise HarnessGenerationError(f"opencode 没有返回合法 JSON：{exc}") from exc
+            raise HarnessGenerationError(f"{tool} 没有返回合法 JSON：{exc}") from exc
 
-    raise HarnessGenerationError("opencode 未返回结果")
-
-
-def normalize_llm_mode(value: str) -> str:
-    mode = (value or DEFAULT_LLM_MODE).strip().lower()
-    if mode not in {"api", "opencode"}:
-        raise HarnessGenerationError(f"未知 LLM 调用模式：{value}")
-    return mode
+    raise HarnessGenerationError(f"{tool} 未返回结果")
 
 
-def build_opencode_command(*, executable: str, repo: str, prompt: str, model: str = "") -> list[str]:
-    repo_dir = resolve_repo_dir(repo)
-    command = [resolve_cli_executable(executable), "run", "--dir", str(repo_dir)]
-    if model:
-        command.extend(["--model", model])
-    command.append(prompt)
-    return command
+def normalize_ai_cli_tool(tool: str, executable: str = "") -> str:
+    value = (tool or "").strip().lower()
+    if value in AI_CLI_TOOLS:
+        return value
+    inferred = Path(executable).name.lower() if executable else ""
+    if inferred in AI_CLI_TOOLS:
+        return inferred
+    return DEFAULT_OPENCODE_TOOL
 
 
-def resolve_cli_executable(executable: str) -> str:
-    name = (executable or DEFAULT_OPENCODE_EXECUTABLE).strip()
-    path = Path(name).expanduser()
-    if path.is_absolute() or os.sep in name or (os.altsep and os.altsep in name):
-        return str(path)
+def build_opencode_command(*, tool: str = "", executable: str, repo: str, prompt: str, model: str = "") -> list[str]:
+    selected_tool = normalize_ai_cli_tool(tool, executable)
+    resolved_executable = resolve_cli_executable(selected_tool, executable)
+    return build_cli_command(
+        tool=selected_tool,
+        executable=resolved_executable,
+        repo=repo,
+        prompt=prompt,
+        model=model,
+    )
+
+
+def build_cli_command(*, tool: str, executable: str, repo: str, prompt: str, model: str = "") -> list[str]:
+    if tool in {"nga", "opencode"}:
+        repo_dir = resolve_repo_dir(repo)
+        command = [executable, "run", "--dir", str(repo_dir)]
+        if model:
+            command.extend(["--model", model])
+        command.append(prompt)
+        return command
+
+    if tool == "claude":
+        command = [executable, "-p"]
+        if model:
+            command.extend(["--model", model])
+        command.append(prompt)
+        return command
+
+    if tool == "hac":
+        command = [executable]
+        if model:
+            command.extend(["--model", model])
+        command.extend(["-p", prompt])
+        return command
+
+    raise HarnessGenerationError(f"未知 AI CLI 工具：{tool}")
+
+
+def resolve_cli_executable(tool: str, executable: str = "") -> str:
+    selected_tool = normalize_ai_cli_tool(tool, executable)
+    name = (executable or DEFAULT_CLI_EXECUTABLES[selected_tool]).strip()
     resolved = shutil.which(name)
     if resolved:
         return resolved
-    return resolve_cli_executable_from_shell(name) or name
-
-
-def resolve_cli_executable_from_shell(executable: str) -> str:
-    if os.name == "nt":
-        return resolve_windows_cli_executable(executable)
-    return resolve_posix_cli_executable(executable)
-
-
-def resolve_windows_cli_executable(executable: str) -> str:
-    powershell_name = executable.replace("'", "''")
-    commands = [
-        ["cmd", "/d", "/c", f'where "{executable}"'],
-        [
-            "powershell",
-            "-NoProfile",
-            "-Command",
-            f"Get-Command -Name '{powershell_name}' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source",
-        ],
-    ]
-    for command in commands:
+    if sys.platform != "win32":
         try:
-            completed = subprocess.run(
-                command,
-                cwd=PROJECT_ROOT,
+            result = subprocess.run(
+                ["bash", "-lc", f"command -v {shlex.quote(name)}"],
                 capture_output=True,
                 text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=3,
+                timeout=5,
             )
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        if completed.returncode != 0:
-            continue
-        for line in completed.stdout.splitlines():
-            candidate = line.strip()
-            if candidate:
-                return candidate
-    return ""
-
-
-def resolve_posix_cli_executable(executable: str) -> str:
-    shells = []
-    configured_shell = os.environ.get("SHELL")
-    if configured_shell:
-        shells.append(configured_shell)
-    shells.extend(["/bin/zsh", "/bin/bash"])
-    seen: set[str] = set()
-    for shell in shells:
-        if not shell or shell in seen or not Path(shell).exists():
-            continue
-        seen.add(shell)
-        for flag in ["-lc", "-lic"]:
-            try:
-                completed = subprocess.run(
-                    [shell, flag, f"command -v {shlex.quote(executable)}"],
-                    cwd=PROJECT_ROOT,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=3,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                continue
-            if completed.returncode != 0:
-                continue
-            for line in completed.stdout.splitlines():
-                candidate = line.strip()
-                if candidate and Path(candidate).expanduser().is_absolute():
-                    return str(Path(candidate).expanduser())
-    return ""
+            if result.returncode == 0:
+                path = result.stdout.strip()
+                if path:
+                    return path
+        except Exception:
+            pass
+    raise FileNotFoundError(
+        f"{selected_tool} executable '{name}' not found in PATH. "
+        "请检查模型设置中的 CLI executable；Windows 上按 OpenDeepHole 的方式填写完整路径，例如 C:/tools/nga.cmd。"
+    )
 
 
 def resolve_repo_dir(value: str) -> Path:
@@ -584,6 +578,13 @@ def resolve_repo_dir(value: str) -> Path:
     if path.is_absolute():
         return path
     return (PROJECT_ROOT / path).resolve()
+
+
+def normalize_llm_mode(value: str) -> str:
+    mode = (value or DEFAULT_LLM_MODE).strip().lower()
+    if mode not in {"api", "opencode"}:
+        raise HarnessGenerationError(f"未知 LLM 调用模式：{value}")
+    return mode
 
 
 def log_llm_interaction(kind: str, interaction: str, transcript_path: Path | None) -> None:

@@ -205,12 +205,21 @@
           </div>
           <div class="model-opencode-fields" hidden>
             <label>
-              opencode CLI
-              <input name="opencode_executable" placeholder="opencode" />
+              CLI 工具
+              <select name="opencode_tool">
+                <option value="nga">nga</option>
+                <option value="opencode">opencode</option>
+                <option value="hac">hac</option>
+                <option value="claude">claude</option>
+              </select>
             </label>
             <label>
-              opencode 模型
-              <input name="opencode_model" placeholder="留空使用 opencode 默认模型" />
+              CLI executable
+              <input name="opencode_executable" placeholder="nga；Windows 可填 C:/tools/nga.cmd" />
+            </label>
+            <label>
+              CLI 模型
+              <input name="opencode_model" placeholder="留空使用 CLI 默认模型" />
             </label>
           </div>
           <div class="modal-footer">

@@ -123,7 +123,8 @@ function applyDefaults(defaults) {
   setModelSettingsField("model", defaults.model);
   setModelSettingsField("chat_url", defaults.chat_url);
   setModelSettingsField("api_key", "");
-  setModelSettingsField("opencode_executable", defaults.opencode_executable || "opencode");
+  setModelSettingsField("opencode_tool", defaults.opencode_tool || "nga");
+  setModelSettingsField("opencode_executable", defaults.opencode_executable || "nga");
   setModelSettingsField("opencode_model", defaults.opencode_model || "");
   setField("model_timeout", defaults.model_timeout);
   setField("model_max_retries", defaults.model_max_retries);
@@ -205,6 +206,7 @@ async function saveModelSettings(event) {
   const model = modelSettingsForm.elements.model.value.trim();
   const chatUrl = modelSettingsForm.elements.chat_url.value.trim();
   const apiKey = modelSettingsForm.elements.api_key.value.trim();
+  const opencodeTool = modelSettingsForm.elements.opencode_tool.value.trim();
   const opencodeExecutable = modelSettingsForm.elements.opencode_executable.value.trim();
   const opencodeModel = modelSettingsForm.elements.opencode_model.value.trim();
   if (llmMode === "api" && (!model || !chatUrl || !apiKey)) {
@@ -212,7 +214,7 @@ async function saveModelSettings(event) {
     return;
   }
   if (llmMode === "opencode" && !opencodeExecutable) {
-    modelSettingsStatus.textContent = "请填写 opencode CLI。";
+    modelSettingsStatus.textContent = "请填写 CLI executable。";
     return;
   }
   saveModelSettingsButton.disabled = true;
@@ -225,6 +227,7 @@ async function saveModelSettings(event) {
         model,
         chat_url: chatUrl,
         api_key: apiKey,
+        opencode_tool: opencodeTool,
         opencode_executable: opencodeExecutable,
         opencode_model: opencodeModel,
       }),

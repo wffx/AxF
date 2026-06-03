@@ -50,8 +50,10 @@ class TerminalTest(unittest.TestCase):
                 "report_json,params,harness_generation_agent",
                 "--llm-mode",
                 "opencode",
+                "--opencode-tool",
+                "nga",
                 "--opencode-executable",
-                "opencode",
+                "nga",
                 "--opencode-model",
                 "anthropic/claude-sonnet-4",
                 "--model",
@@ -67,7 +69,8 @@ class TerminalTest(unittest.TestCase):
 
         self.assertEqual(config["artifacts"], ["report_json", "params", HARNESS_AGENT_ARTIFACT])
         self.assertEqual(config["llm_mode"], "opencode")
-        self.assertEqual(config["opencode_executable"], "opencode")
+        self.assertEqual(config["opencode_tool"], "nga")
+        self.assertEqual(config["opencode_executable"], "nga")
         self.assertEqual(config["opencode_model"], "anthropic/claude-sonnet-4")
         self.assertEqual(config["model"], "glm-5.1")
         self.assertEqual(config["clang_mode"], "wsl")

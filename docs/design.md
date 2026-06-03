@@ -480,7 +480,8 @@ MODEL=glm-5.1
 
 ```text
 LLM_MODE=opencode
-OPENCODE_EXECUTABLE=opencode
+OPENCODE_TOOL=nga
+OPENCODE_EXECUTABLE=nga
 OPENCODE_MODEL=anthropic/claude-sonnet-4
 ```
 
@@ -499,7 +500,7 @@ LLM 配置在前端中以 `LLM 生成` 区域呈现，含义如下：
 模型重试次数      -> --max-retries，默认 2
 ```
 
-模型连接参数通过主页顶部的 `模型设置` 弹窗配置。API 模式填写模型、Chat Completions URL 和 API Key；opencode 模式填写 CLI 可执行文件和可选模型。保存后会写入仓库根目录的 `.env.local` 并同步当前 server 进程环境变量；任务配置中不保存真实密钥。
+模型连接参数通过主页顶部的 `模型设置` 弹窗配置。API 模式填写模型、Chat Completions URL 和 API Key；CLI 模式填写工具、executable 和可选模型。保存后会写入仓库根目录的 `.env.local` 并同步当前 server 进程环境变量；任务配置中不保存真实密钥。
 
 模型请求默认使用 OpenAI-compatible Chat Completions 的流式响应，即请求体包含 `"stream": true`，并按 SSE `data:` chunk 拼接 `choices[].delta.content`。这对 harness 修复轮很重要：修复轮输出可能较长，非流式调用必须等完整响应结束才返回，容易触发 read timeout。需要排查服务端兼容性时，可在命令行加 `--no-stream` 临时退回非流式。
 
@@ -508,10 +509,10 @@ URL 也做了兼容处理：如果配置的是完整 `.../chat/completions`，Ag
 当 `LLM_MODE=opencode` 时，Harness 生成 Agent 不读取 API Key，而是调用：
 
 ```text
-opencode run --dir <源码根目录> --model <模型> <prompt>
+nga run --dir <源码根目录> --model <模型> <prompt>
 ```
 
-`OPENCODE_MODEL` 为空时不传 `--model`，由 opencode 使用自己的默认模型。
+`OPENCODE_TOOL` 可选 `nga`、`opencode`、`hac`、`claude`，命令形态按 OpenDeepHole 的 `_build_cli_command` 保持一致。`OPENCODE_MODEL` 为空时不传 `--model`，由 CLI 使用自己的默认模型。Windows 上如果只填 `nga` 找不到，需要把 `OPENCODE_EXECUTABLE` 填成完整路径，例如 `C:/tools/nga.cmd`。
 
 和编译修复相关的配置也在同一区域：
 
@@ -868,7 +869,7 @@ failed
 - 同名函数未用 `--file` 精确过滤。
 - `API_KEY` 没有设置。
 - `CHAT_COMPLETIONS_URL` 没有设置。
-- `LLM_MODE=opencode` 但找不到 opencode CLI。
+- `LLM_MODE=opencode` 但找不到 CLI executable。
 - 模型返回不是合法 JSON。
 - 模型输出的文件路径非法。
 - 编译失败后请求 LLM 修复超时。
@@ -902,7 +903,8 @@ $env:MODEL='glm-5.1'
 
 ```powershell
 $env:LLM_MODE='opencode'
-$env:OPENCODE_EXECUTABLE='opencode'
+$env:OPENCODE_TOOL='nga'
+$env:OPENCODE_EXECUTABLE='C:/tools/nga.cmd'
 $env:OPENCODE_MODEL='anthropic/claude-sonnet-4'
 ```
 

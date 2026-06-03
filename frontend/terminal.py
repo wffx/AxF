@@ -295,15 +295,22 @@ def config_from_args(args: argparse.Namespace, *, input_func=input, output: Text
         config["chat_url"] = prompt_text("Chat Completions URL", str(args.chat_url or config["chat_url"]), input_func, stream)
         config["api_key_env"] = prompt_text("API Key 环境变量", str(args.api_key_env or config["api_key_env"]), input_func, stream)
     else:
+        config["opencode_tool"] = prompt_choice(
+            "CLI 工具",
+            str(args.opencode_tool or config["opencode_tool"]),
+            ["nga", "opencode", "hac", "claude"],
+            input_func,
+            stream,
+        )
         config["opencode_executable"] = prompt_text(
-            "opencode CLI",
+            "CLI executable",
             str(args.opencode_executable or config["opencode_executable"]),
             input_func,
             stream,
             required=True,
         )
         config["opencode_model"] = prompt_text(
-            "opencode 模型",
+            "CLI 模型",
             str(args.opencode_model or config["opencode_model"]),
             input_func,
             stream,
@@ -341,6 +348,7 @@ def apply_args_to_config(config: dict[str, Any], args: argparse.Namespace) -> No
         "model": args.model,
         "chat_url": args.chat_url,
         "api_key_env": args.api_key_env,
+        "opencode_tool": args.opencode_tool,
         "opencode_executable": args.opencode_executable,
         "opencode_model": args.opencode_model,
         "model_timeout": args.model_timeout,
@@ -433,6 +441,7 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model")
     parser.add_argument("--chat-url")
     parser.add_argument("--api-key-env")
+    parser.add_argument("--opencode-tool", choices=["nga", "opencode", "hac", "claude"])
     parser.add_argument("--opencode-executable")
     parser.add_argument("--opencode-model")
     parser.add_argument("--model-timeout", type=int)

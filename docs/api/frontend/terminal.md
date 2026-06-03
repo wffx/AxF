@@ -121,6 +121,7 @@ harness/
 --model MODEL
 --chat-url URL
 --api-key-env NAME
+--opencode-tool nga|opencode|hac|claude
 --opencode-executable PATH
 --opencode-model MODEL
 --model-timeout SECONDS

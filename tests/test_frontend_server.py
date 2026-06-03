@@ -68,7 +68,8 @@ class FrontendServerTest(unittest.TestCase):
         self.assertIn("harness_generation_agent", defaults["artifacts"])
         self.assertEqual(defaults["llm_mode"], "api")
         self.assertEqual(defaults["api_key_env"], "API_KEY")
-        self.assertEqual(defaults["opencode_executable"], "opencode")
+        self.assertEqual(defaults["opencode_tool"], "nga")
+        self.assertEqual(defaults["opencode_executable"], "nga")
         self.assertEqual(defaults["model_timeout"], 300)
         self.assertEqual(defaults["model_max_retries"], 2)
 
@@ -152,23 +153,27 @@ class FrontendServerTest(unittest.TestCase):
                 result = save_model_settings_to_local_env(
                     {
                         "llm_mode": "opencode",
-                        "opencode_executable": "opencode",
+                        "opencode_tool": "nga",
+                        "opencode_executable": "nga",
                         "opencode_model": "anthropic/claude-sonnet-4",
                     }
                 )
                 text = (root / ".env.local").read_text(encoding="utf-8")
                 mode_value = os.environ["LLM_MODE"]
+                tool_value = os.environ["OPENCODE_TOOL"]
                 executable_value = os.environ["OPENCODE_EXECUTABLE"]
                 model_value = os.environ["OPENCODE_MODEL"]
 
         self.assertEqual(result["status"], "saved")
         self.assertEqual(result["mode"], "opencode")
         self.assertIn("LLM_MODE=opencode", text)
-        self.assertIn("OPENCODE_EXECUTABLE=opencode", text)
+        self.assertIn("OPENCODE_TOOL=nga", text)
+        self.assertIn("OPENCODE_EXECUTABLE=nga", text)
         self.assertIn("OPENCODE_MODEL=anthropic/claude-sonnet-4", text)
         self.assertNotIn("API_KEY=", text)
         self.assertEqual(mode_value, "opencode")
-        self.assertEqual(executable_value, "opencode")
+        self.assertEqual(tool_value, "nga")
+        self.assertEqual(executable_value, "nga")
         self.assertEqual(model_value, "anthropic/claude-sonnet-4")
 
     def test_empty_artifact_selection_does_not_fall_back_to_defaults(self) -> None:
