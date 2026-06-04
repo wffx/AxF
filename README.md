@@ -111,10 +111,17 @@ Windows 任务开始前会先检查 `rg`。上层调用链抽取依赖 `ripgrep`
 workspace/web/tasks/<task_id>/
 ```
 
-也可以不启动前端，直接使用 Terminal 入口。默认是交互式选择：
+也可以不启动前端，直接使用 Terminal 入口。`run` 默认会转入 Docker compose 的 `dev`
+容器执行，因此任务日志里应显示 `运行环境：Docker 容器`。默认是交互式选择：
 
 ```bash
 python -m frontend.terminal run
+```
+
+需要直接在当前 WSL/本机进程里调试时，加 `--local`：
+
+```bash
+python -m frontend.terminal run --local
 ```
 
 脚本化运行时用 `--artifacts` 指定产物 id：

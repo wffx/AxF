@@ -13,9 +13,12 @@ from frontend.server import HARNESS_AGENT_ARTIFACT, PipelineStep, default_config
 from frontend.terminal import (
     TerminalTaskRunner,
     config_from_args,
+    docker_terminal_command,
+    main,
     parse_args,
     parse_artifacts,
     prompt_api_key,
+    should_launch_docker,
     terminal_default_config,
 )
 
@@ -81,6 +84,59 @@ class TerminalTest(unittest.TestCase):
 
     def test_terminal_default_config_matches_frontend_defaults(self) -> None:
         self.assertEqual(terminal_default_config(), default_config())
+
+    def test_terminal_run_defaults_to_docker_outside_container(self) -> None:
+        args = parse_args(["run"])
+
+        with (
+            mock.patch("frontend.terminal._running_in_docker", return_value=False),
+            mock.patch.dict(os.environ, {}, clear=True),
+        ):
+            launch = should_launch_docker(args)
+
+        self.assertTrue(launch)
+
+    def test_terminal_run_local_disables_docker_launcher(self) -> None:
+        args = parse_args(["run", "--local"])
+
+        with (
+            mock.patch("frontend.terminal._running_in_docker", return_value=False),
+            mock.patch.dict(os.environ, {}, clear=True),
+        ):
+            launch = should_launch_docker(args)
+
+        self.assertFalse(launch)
+
+    def test_terminal_runtime_env_can_disable_docker_launcher(self) -> None:
+        args = parse_args(["run"])
+
+        with (
+            mock.patch("frontend.terminal._running_in_docker", return_value=False),
+            mock.patch.dict(os.environ, {"AXF_TERMINAL_RUNTIME": "local"}, clear=True),
+        ):
+            launch = should_launch_docker(args)
+
+        self.assertFalse(launch)
+
+    def test_docker_terminal_command_wraps_original_args(self) -> None:
+        with mock.patch.dict(os.environ, {"AXF_DOCKER_CONTEXT": "desktop-linux"}, clear=True):
+            command = docker_terminal_command(["run", "--non-interactive"])
+
+        self.assertEqual(command[:2], ["docker", "--context"])
+        self.assertIn("desktop-linux", command)
+        self.assertIn("compose", command)
+        self.assertIn("dev", command)
+        self.assertEqual(command[-5:], ["python", "-m", "frontend.terminal", "run", "--non-interactive"])
+
+    def test_main_uses_docker_launcher_before_config_validation(self) -> None:
+        with (
+            mock.patch("frontend.terminal.should_launch_docker", return_value=True),
+            mock.patch("frontend.terminal.run_in_docker", return_value=23) as launcher,
+        ):
+            returncode = main(["run", "--non-interactive"])
+
+        self.assertEqual(returncode, 23)
+        launcher.assert_called_once_with(["run", "--non-interactive"])
 
     def test_non_interactive_api_key_sets_environment_without_config(self) -> None:
         args = parse_args(

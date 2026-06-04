@@ -22,6 +22,7 @@ from frontend.server import (
     _harness_events_for_step,
     _harness_failure_message_for_step,
     _resolve_user_path,
+    _running_in_docker,
     _step_action_label,
     build_steps,
     default_config,
@@ -32,6 +33,7 @@ from frontend.server import (
 
 
 TERMINAL_WORKSPACE = PROJECT_ROOT / "workspace" / "terminal" / "tasks"
+DOCKER_COMPOSE_FILE = PROJECT_ROOT / "docker" / "docker-compose.yml"
 ARTIFACT_OPTIONS = [
     ("report_md", "Markdown 报告"),
     ("report_json", "JSON 报告"),
@@ -456,6 +458,56 @@ def prompt_artifacts(value: str | None, default: list[str], input_func: Any, out
             print(f"错误：{exc}", file=output)
 
 
+def should_launch_docker(args: argparse.Namespace) -> bool:
+    if args.command != "run":
+        return False
+    if getattr(args, "local", False):
+        return False
+    runtime = str(os.environ.get("AXF_TERMINAL_RUNTIME") or "").strip().lower()
+    if runtime in {"local", "host"}:
+        return False
+    return not _running_in_docker()
+
+
+def docker_terminal_command(argv: list[str]) -> list[str]:
+    docker = os.environ.get("AXF_DOCKER") or "docker"
+    command = [docker, *_docker_context_args(), "compose", "-f", str(DOCKER_COMPOSE_FILE), "run", "--rm"]
+    if not sys.stdin.isatty():
+        command.append("-T")
+    command.extend(["dev", "python", "-m", "frontend.terminal", *argv])
+    return command
+
+
+def run_in_docker(argv: list[str]) -> int:
+    command = docker_terminal_command(argv)
+    print("AxF Terminal：默认转入 Docker 容器执行；本机执行请加 --local。", file=sys.stderr, flush=True)
+    try:
+        completed = subprocess.run(command, cwd=PROJECT_ROOT, check=False)
+    except OSError as exc:
+        print(f"启动 Docker 失败：{exc}", file=sys.stderr, flush=True)
+        print("如需直接在当前环境运行，请加 --local 或设置 AXF_TERMINAL_RUNTIME=local。", file=sys.stderr, flush=True)
+        return 127
+    return completed.returncode
+
+
+def _docker_context_args() -> list[str]:
+    configured = os.environ.get("AXF_DOCKER_CONTEXT")
+    if configured is not None:
+        context = configured.strip()
+        return ["--context", context] if context else []
+    docker = os.environ.get("AXF_DOCKER") or "docker"
+    try:
+        completed = subprocess.run(
+            [docker, "context", "inspect", "desktop-linux"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return []
+    return ["--context", "desktop-linux"] if completed.returncode == 0 else []
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AxF terminal pipeline")
     subparsers = parser.add_subparsers(dest="command")
@@ -498,10 +550,12 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--workspace", default=str(TERMINAL_WORKSPACE))
     parser.add_argument("--non-interactive", action="store_true")
     parser.add_argument("--async", dest="async_run", action="store_true", help="后台提交任务后立即返回")
+    parser.add_argument("--local", action="store_true", help="直接在当前环境运行，不自动转入 Docker")
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    args = parse_args(raw_argv)
     if args.command == "worker":
         task_dir = _resolve_user_path(args.task_dir)
         config_path = _resolve_user_path(args.config)
@@ -510,12 +564,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command != "run":
         print("用法：python -m frontend.terminal run [options]", file=sys.stderr)
         return 2
+    if should_launch_docker(args):
+        return run_in_docker(raw_argv)
     try:
         config = config_from_args(args)
     except ValueError as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 2
-    runner = TerminalTaskRunner(Path(args.workspace))
+    runner = TerminalTaskRunner(_resolve_user_path(args.workspace))
     if args.async_run:
         return runner.submit_async(config)
     return runner.run(config)

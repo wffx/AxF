@@ -1,6 +1,7 @@
 # Terminal CLI
 
-`frontend.terminal` 提供不依赖 Web 服务的本地任务入口。它和 Web 控制台共享 `frontend.server.build_steps()`，因此产物选择、知识库复用、Harness prompt 输入规则保持一致。
+`frontend.terminal` 提供不依赖 Web 服务的任务入口。`run` 默认会转入 Docker compose
+的 `dev` 容器执行；它和 Web 控制台共享 `frontend.server.build_steps()`，因此产物选择、知识库复用、Harness prompt 输入规则保持一致。
 
 ## 入口
 
@@ -8,6 +9,13 @@
 
 ```bash
 python -m frontend.terminal run
+```
+
+需要直接在当前 WSL/本机进程里调试时，加 `--local`，或设置
+`AXF_TERMINAL_RUNTIME=local`：
+
+```bash
+python -m frontend.terminal run --local
 ```
 
 脚本模式：
@@ -26,6 +34,7 @@ python -m frontend.terminal run \
 Terminal 和 Web 共用同一套任务执行逻辑，所以脚本模式不是“轻量版”。它同样会：
 
 - 读取仓库根目录 `.env.local` / `.env`。
+- 默认在 Docker `dev` 容器中运行；容器内不会再次转入 Docker。
 - 按本次选择生成或复用知识产物。
 - 在 Windows 上执行 `rg` / Scoop 预检。
 - 调用 Harness 生成 Agent。
