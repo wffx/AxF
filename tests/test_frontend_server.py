@@ -406,6 +406,30 @@ class FrontendServerTest(unittest.TestCase):
         self.assertIn(f"--report-json {task_dir / 'report.json'}", command_text)
         self.assertIn(f"--params {task_dir / 'params.txt'}", command_text)
 
+    def test_host_absolute_knowledge_dir_can_remap_to_project_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            knowledge_dir = root / "workspace" / "web" / "tasks" / "old"
+            task_dir = root / "task"
+            knowledge_dir.mkdir(parents=True)
+            (knowledge_dir / "report.json").write_text("{}", encoding="utf-8")
+            host_absolute_dir = "/host/AxF/workspace/web/tasks/old"
+
+            with mock.patch("frontend.server.PROJECT_ROOT", root):
+                steps = build_steps(
+                    {
+                        "repo": "./linux-7.0",
+                        "function": "can_send",
+                        "file": "net/can/af_can.c",
+                        "knowledge_dir": host_absolute_dir,
+                        "artifacts": ["report_json"],
+                    },
+                    task_dir,
+                )
+
+        self.assertEqual(steps[0].reuse_from, knowledge_dir / "report.json")
+        self.assertEqual(steps[0].command[0], "reuse")
+
     def test_parse_model_json_accepts_fenced_json(self) -> None:
         payload = parse_model_json(
             """```json

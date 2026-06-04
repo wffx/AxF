@@ -873,8 +873,22 @@ def _knowledge_reuse_path(config: dict[str, Any], artifact_name: str, function: 
 def _resolve_user_path(value: str) -> Path:
     path = Path(value).expanduser()
     if path.is_absolute():
+        if path.exists():
+            return path
+        remapped = _project_suffix_path(path)
+        if remapped:
+            return remapped
         return path
     return (PROJECT_ROOT / path).resolve()
+
+
+def _project_suffix_path(path: Path) -> Path | None:
+    parts = path.parts
+    for index in range(1, len(parts)):
+        candidate = PROJECT_ROOT.joinpath(*parts[index:])
+        if candidate.exists():
+            return candidate
+    return None
 
 
 _KREPO_ARTIFACT_NAMES = {"report_md", "report_json", "source", "subsource", "calls", "params"}
