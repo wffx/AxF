@@ -44,6 +44,14 @@ DOCKER.md
 /linux-7.0
 ```
 
+容器启动时会读取 `/linux-7.0/.vscode/BROWSE.VC.DB` 的 `files` 表。如果索引里记录的是宿主机绝对路径，例如：
+
+```text
+/Users/yufei/Documents/llm fuzzing/linux-7.0
+```
+
+entrypoint 会在容器内自动创建这个路径到 `/linux-7.0` 的符号链接。这样 kRepo 不需要改代码，也能读取索引里记录的源码路径。
+
 如果你的 Linux 源码不在这个位置，启动前设置：
 
 ```bash
