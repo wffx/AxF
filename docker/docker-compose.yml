@@ -1,0 +1,39 @@
+name: axf
+
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: axf-dev
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+      - ${LINUX_ROOT:-../../linux-7.0}:/linux-7.0
+    environment:
+      PYTHONPATH: /workspace:/workspace/knowledge_base
+    stdin_open: true
+    tty: true
+    command: bash
+
+  axf-web:
+    image: axf-dev
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+      - ${LINUX_ROOT:-../../linux-7.0}:/linux-7.0
+    environment:
+      PYTHONPATH: /workspace:/workspace/knowledge_base
+    ports:
+      - "${AXF_WEB_PORT:-8787}:8787"
+    command:
+      - python
+      - -m
+      - frontend.server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8787"
