@@ -278,6 +278,7 @@ def config_from_args(args: argparse.Namespace, *, input_func=input, output: Text
             raise ValueError("非交互模式缺少必填参数：" + ", ".join("--" + name.replace("_", "-") for name in missing))
         config = terminal_default_config()
         apply_args_to_config(config, args)
+        apply_api_key_to_environment(getattr(args, "api_key", None), config.get("api_key_env"))
         config["artifacts"] = parse_artifacts(args.artifacts)
         return config
 
@@ -304,8 +305,14 @@ def config_from_args(args: argparse.Namespace, *, input_func=input, output: Text
     )
     if config["llm_mode"] == "api":
         config["model"] = prompt_text("模型", str(args.model or config["model"]), input_func, stream)
-        config["chat_url"] = prompt_text("Chat Completions URL", str(args.chat_url or config["chat_url"]), input_func, stream)
+        config["chat_url"] = prompt_text(
+            "模型 URL / Chat Completions URL",
+            str(args.chat_url or config["chat_url"]),
+            input_func,
+            stream,
+        )
         config["api_key_env"] = prompt_text("API Key 环境变量", str(args.api_key_env or config["api_key_env"]), input_func, stream)
+        prompt_api_key(config["api_key_env"], getattr(args, "api_key", None), input_func, stream)
     else:
         config["opencode_tool"] = prompt_choice(
             "CLI 工具",
@@ -381,6 +388,25 @@ def apply_args_to_config(config: dict[str, Any], args: argparse.Namespace) -> No
             config[key] = value
 
 
+def apply_api_key_to_environment(api_key: str | None, api_key_env: Any) -> None:
+    value = (api_key or "").strip()
+    if not value:
+        return
+    env_name = str(api_key_env or "API_KEY").strip() or "API_KEY"
+    os.environ[env_name] = value
+
+
+def prompt_api_key(api_key_env: str, api_key: str | None, input_func: Any, output: TextIO) -> None:
+    env_name = str(api_key_env or "API_KEY").strip() or "API_KEY"
+    if api_key:
+        apply_api_key_to_environment(api_key, env_name)
+        return
+    state = "已设置" if os.environ.get(env_name) else "未设置"
+    value = input_func(f"API Key（留空沿用 {env_name} 当前值） [{state}]: ").strip()
+    if value:
+        os.environ[env_name] = value
+
+
 def prompt_text(label: str, default: str, input_func: Any, output: TextIO, *, required: bool = False) -> str:
     while True:
         value = input_func(f"{label} [{default}]: ").strip()
@@ -451,7 +477,8 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--artifacts", help="逗号分隔的产物 id 或编号")
     parser.add_argument("--llm-mode", choices=["api", "opencode"])
     parser.add_argument("--model")
-    parser.add_argument("--chat-url")
+    parser.add_argument("--chat-url", "--model-url", dest="chat_url", help="Chat Completions endpoint 或模型服务 base URL")
+    parser.add_argument("--api-key", help="API key；仅写入当前进程环境，不保存到任务配置")
     parser.add_argument("--api-key-env")
     parser.add_argument("--opencode-tool", choices=["nga", "opencode", "hac", "claude"])
     parser.add_argument("--opencode-executable")

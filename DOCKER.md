@@ -246,9 +246,15 @@ docker --context desktop-linux compose -f docker/docker-compose.yml run --rm dev
     --function can_send \
     --file net/can/af_can.c \
     --artifacts report_json,subsource,params,harness_generation_agent \
+    --llm-mode api \
     --model glm-5.1 \
+    --model-url https://provider.example/v1/chat/completions \
+    --api-key sk-your-key \
     --clang /usr/bin/clang-14
 ```
+
+Compose 已给 `dev` 和 `axf-web` 设置 `CLANG=/usr/bin/clang-14`。命令里不写
+`--clang` 时，Terminal 和 Web 任务也会默认使用容器内的 `/usr/bin/clang-14`。
 
 ## 当前本地验证状态
 

@@ -1585,6 +1585,10 @@ def resolve_clang(args: argparse.Namespace) -> str:
         homebrew_clang = Path("/opt/homebrew/opt/llvm/bin/clang")
         if homebrew_clang.exists():
             return str(homebrew_clang)
+    for candidate in ("clang-14", "clang"):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
     return "clang"
 
 

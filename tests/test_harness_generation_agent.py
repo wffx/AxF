@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -853,6 +854,22 @@ retry log follows
         self.assertTrue(result.ok)
         self.assertEqual(result.returncode, 0)
         self.assertIn("compiling", result.output)
+
+    def test_resolve_clang_prefers_clang_14_when_available(self) -> None:
+        def fake_which(name: str) -> str | None:
+            if name == "clang-14":
+                return "/usr/bin/clang-14"
+            return None
+
+        args = argparse.Namespace(clang="", clang_mode="native")
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch("agents.harness_generation.agent.Path.exists", return_value=False),
+            mock.patch("agents.harness_generation.agent.shutil.which", side_effect=fake_which),
+        ):
+            clang = resolve_clang(args)
+
+        self.assertEqual(clang, "/usr/bin/clang-14")
 
     def test_compile_harness_falls_back_to_lighter_sanitizers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

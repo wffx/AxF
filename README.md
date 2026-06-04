@@ -126,8 +126,35 @@ python -m frontend.terminal run \
   --function can_send \
   --file net/can/af_can.c \
   --artifacts report_json,subsource,params,harness_generation_agent \
-  --model glm-5.1
+  --llm-mode api \
+  --model glm-5.1 \
+  --model-url https://provider.example/v1/chat/completions \
+  --api-key sk-your-key
 ```
+
+`--api-key` 只会写入当前 Terminal 进程环境，不会保存到任务配置或日志。也可以继续用
+`--api-key-env API_KEY`，让 Agent 从已有环境变量读取密钥。注意命令行里的 key 仍可能留在
+shell history 或进程参数里；敏感环境建议使用交互模式输入或环境变量。
+
+Docker 容器内试用：
+
+```bash
+docker --context desktop-linux compose -f docker/docker-compose.yml run --rm dev \
+  python -m frontend.terminal run \
+    --non-interactive \
+    --repo /linux-7.0 \
+    --function can_send \
+    --file net/can/af_can.c \
+    --artifacts report_json,subsource,params,harness_generation_agent \
+    --llm-mode api \
+    --model glm-5.1 \
+    --model-url https://api.xixixixi.cloud/v1/chat/completions \
+    --api-key '你的API_KEY' \
+    --clang /usr/bin/clang-14
+```
+
+Docker compose 会默认设置 `CLANG=/usr/bin/clang-14`，所以 `--clang /usr/bin/clang-14`
+可以省略；保留它只是为了让试用命令更明确。
 
 Terminal 也可以显式使用 opencode：
 

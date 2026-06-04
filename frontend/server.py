@@ -561,7 +561,7 @@ def default_config() -> dict[str, Any]:
         "opencode_model": os.environ.get("OPENCODE_MODEL") or "",
         "model_timeout": DEFAULT_MODEL_TIMEOUT,
         "model_max_retries": DEFAULT_MODEL_MAX_RETRIES,
-        "clang": "",
+        "clang": _default_clang_path(),
         "clang_mode": "native",
         "max_repair_rounds": 3,
         "compile_timeout": 60,
@@ -572,6 +572,17 @@ def default_config() -> dict[str, Any]:
         "max_functions": 30,
         "call_depth": 3,
     }
+
+
+def _default_clang_path() -> str:
+    configured = str(os.environ.get("CLANG") or "").strip()
+    if configured:
+        return configured
+    if os.name != "nt":
+        homebrew_clang = Path("/opt/homebrew/opt/llvm/bin/clang")
+        if homebrew_clang.exists():
+            return str(homebrew_clang)
+    return shutil.which("clang-14") or shutil.which("clang") or ""
 
 
 def _default_repo_path() -> str:

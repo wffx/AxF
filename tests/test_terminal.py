@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ from frontend.terminal import (
     config_from_args,
     parse_args,
     parse_artifacts,
+    prompt_api_key,
     terminal_default_config,
 )
 
@@ -79,6 +81,45 @@ class TerminalTest(unittest.TestCase):
 
     def test_terminal_default_config_matches_frontend_defaults(self) -> None:
         self.assertEqual(terminal_default_config(), default_config())
+
+    def test_non_interactive_api_key_sets_environment_without_config(self) -> None:
+        args = parse_args(
+            [
+                "run",
+                "--non-interactive",
+                "--repo",
+                "../linux-7.0",
+                "--function",
+                "can_send",
+                "--artifacts",
+                "harness_generation_agent",
+                "--llm-mode",
+                "api",
+                "--model",
+                "glm-5.1",
+                "--model-url",
+                "https://example.invalid/v1/chat/completions",
+                "--api-key-env",
+                "AXF_TEST_API_KEY",
+                "--api-key",
+                "sk-secret",
+            ]
+        )
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = config_from_args(args, output=io.StringIO())
+            env_value = os.environ["AXF_TEST_API_KEY"]
+
+        self.assertEqual(config["chat_url"], "https://example.invalid/v1/chat/completions")
+        self.assertEqual(env_value, "sk-secret")
+        self.assertNotIn("api_key", config)
+
+    def test_prompt_api_key_sets_environment(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            prompt_api_key("AXF_PROMPT_API_KEY", None, lambda _prompt: "sk-prompt", io.StringIO())
+            env_value = os.environ["AXF_PROMPT_API_KEY"]
+
+        self.assertEqual(env_value, "sk-prompt")
 
     def test_runner_writes_task_files_and_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -131,11 +131,14 @@ python -m frontend.terminal run \
   --artifacts report_json,params,harness_generation_agent \
   --llm-mode api \
   --model glm-5.1 \
-  --chat-url https://provider.example/v1/chat/completions \
-  --api-key-env API_KEY
+  --model-url https://provider.example/v1/chat/completions \
+  --api-key sk-your-key
 ```
 
-API key 本身不通过命令行传值，只传环境变量名。这样 `task.log` 里不会出现真实密钥。
+`--model-url` 是 `--chat-url` 的别名，既可以传完整
+`/v1/chat/completions` endpoint，也可以传模型服务 base URL。`--api-key` 只会写入当前
+Terminal 进程环境，不会保存到 `config.json`、`task.json` 或命令日志。也可以继续用
+`--api-key-env API_KEY`，让 Agent 从已有环境变量读取密钥。
 
 opencode CLI 示例：
 
@@ -214,6 +217,8 @@ rg 和 Scoop 都不存在
 --llm-mode api|opencode
 --model MODEL
 --chat-url URL
+--model-url URL
+--api-key KEY
 --api-key-env NAME
 --opencode-tool nga|opencode|hac|claude
 --opencode-executable PATH

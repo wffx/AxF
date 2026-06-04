@@ -75,6 +75,12 @@ class FrontendServerTest(unittest.TestCase):
         self.assertEqual(defaults["model_timeout"], 300)
         self.assertEqual(defaults["model_max_retries"], 2)
 
+    def test_default_config_uses_configured_clang(self) -> None:
+        with mock.patch.dict(os.environ, {"CLANG": "/usr/bin/clang-14"}, clear=True):
+            defaults = default_config()
+
+        self.assertEqual(defaults["clang"], "/usr/bin/clang-14")
+
     def test_sanitize_task_config_drops_legacy_direct_api_key(self) -> None:
         config = {
             "repo": "./linux-7.0",
