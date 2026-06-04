@@ -240,4 +240,5 @@ docker --context desktop-linux compose -f docker/docker-compose.yml run --rm dev
 - kRepo/知识抽取路径可读取本地 Linux 源码。
 - `python -m unittest discover -s tests` 在容器内通过。
 - `http://127.0.0.1:8788/api/defaults` smoke test 通过。
-- 容器 HTTPS 出站测试仍出现 `SSL: UNEXPECTED_EOF_WHILE_READING`，说明当前 Clash TUN 还没有接管 Docker Desktop VM 的 HTTPS 流量；远端 LLM API 调用仍需要继续修 Clash TUN。
+- 容器 HTTPS 出站测试通过，`https://pypi.org/simple/` 和 `https://example.com/` 均返回 `200`。
+- `https://api.xixixixi.cloud/v1/chat/completions` 的 POST 请求可以到达服务端；若返回 `401 无效的令牌`，说明网络已通，需要更新 `.env.local` 中的 `API_KEY`。
