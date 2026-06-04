@@ -119,14 +119,35 @@ class TerminalTest(unittest.TestCase):
         self.assertFalse(launch)
 
     def test_docker_terminal_command_wraps_original_args(self) -> None:
-        with mock.patch.dict(os.environ, {"AXF_DOCKER_CONTEXT": "desktop-linux"}, clear=True):
+        with mock.patch.dict(os.environ, {"AXF_COMPOSE_COMMAND": "docker compose"}, clear=True):
             command = docker_terminal_command(["run", "--non-interactive"])
 
-        self.assertEqual(command[:2], ["docker", "--context"])
-        self.assertIn("desktop-linux", command)
-        self.assertIn("compose", command)
+        self.assertEqual(command[:2], ["docker", "compose"])
         self.assertIn("dev", command)
         self.assertEqual(command[-5:], ["python", "-m", "frontend.terminal", "run", "--non-interactive"])
+
+    def test_docker_terminal_command_falls_back_to_legacy_compose(self) -> None:
+        def fake_run(command: list[str], **_kwargs: object) -> mock.Mock:
+            if command == ["docker", "compose", "version"]:
+                return mock.Mock(returncode=1)
+            if command == ["docker-compose", "version"]:
+                return mock.Mock(returncode=0)
+            return mock.Mock(returncode=1)
+
+        with (
+            mock.patch.dict(os.environ, {"AXF_DOCKER_CONTEXT": ""}, clear=True),
+            mock.patch("frontend.terminal.subprocess.run", side_effect=fake_run),
+        ):
+            command = docker_terminal_command(["run"])
+
+        self.assertEqual(command[0], "docker-compose")
+        self.assertEqual(command[1], "-f")
+
+    def test_docker_terminal_command_can_use_configured_compose_command(self) -> None:
+        with mock.patch.dict(os.environ, {"AXF_COMPOSE_COMMAND": "docker-compose"}, clear=True):
+            command = docker_terminal_command(["run"])
+
+        self.assertEqual(command[:2], ["docker-compose", "-f"])
 
     def test_main_uses_docker_launcher_before_config_validation(self) -> None:
         with (

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -470,8 +471,7 @@ def should_launch_docker(args: argparse.Namespace) -> bool:
 
 
 def docker_terminal_command(argv: list[str]) -> list[str]:
-    docker = os.environ.get("AXF_DOCKER") or "docker"
-    command = [docker, *_docker_context_args(), "compose", "-f", str(DOCKER_COMPOSE_FILE), "run", "--rm"]
+    command = [*_compose_command(), "-f", str(DOCKER_COMPOSE_FILE), "run", "--rm"]
     if not sys.stdin.isatty():
         command.append("-T")
     command.extend(["dev", "python", "-m", "frontend.terminal", *argv])
@@ -480,7 +480,12 @@ def docker_terminal_command(argv: list[str]) -> list[str]:
 
 def run_in_docker(argv: list[str]) -> int:
     command = docker_terminal_command(argv)
-    print("AxF Terminal：默认转入 Docker 容器执行；本机执行请加 --local。", file=sys.stderr, flush=True)
+    print(
+        "AxF Terminal：默认转入 Docker 容器执行；本机执行请加 --local。",
+        file=sys.stderr,
+        flush=True,
+    )
+    print("AxF Terminal Docker 命令：" + shlex.join(command), file=sys.stderr, flush=True)
     try:
         completed = subprocess.run(command, cwd=PROJECT_ROOT, check=False)
     except OSError as exc:
@@ -488,6 +493,39 @@ def run_in_docker(argv: list[str]) -> int:
         print("如需直接在当前环境运行，请加 --local 或设置 AXF_TERMINAL_RUNTIME=local。", file=sys.stderr, flush=True)
         return 127
     return completed.returncode
+
+
+def _compose_command() -> list[str]:
+    configured = str(os.environ.get("AXF_COMPOSE_COMMAND") or "").strip()
+    if configured:
+        return shlex.split(configured)
+
+    docker = os.environ.get("AXF_DOCKER") or "docker"
+    if Path(docker).name == "docker-compose":
+        return [docker]
+
+    docker_compose = [docker, *_docker_context_args(), "compose"]
+    if _command_succeeds([*docker_compose, "version"]):
+        return docker_compose
+
+    legacy = os.environ.get("AXF_DOCKER_COMPOSE") or "docker-compose"
+    if _command_succeeds([legacy, "version"]):
+        return [legacy]
+
+    return docker_compose
+
+
+def _command_succeeds(command: list[str]) -> bool:
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return False
+    return completed.returncode == 0
 
 
 def _docker_context_args() -> list[str]:
