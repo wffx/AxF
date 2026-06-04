@@ -143,6 +143,7 @@ function applyDefaults(defaults) {
     input.checked = selected.has(input.value);
   }
   syncModelSettingsMode();
+  syncClangMode();
   syncArtifactNotes();
 }
 
@@ -163,6 +164,20 @@ function readConfig() {
   }
   config.artifacts = data.getAll("artifacts");
   return config;
+}
+
+function syncClangMode() {
+  const mode = form.elements.clang_mode.value || "native";
+  const clangInput = form.elements.clang;
+  if (!clangInput) {
+    return;
+  }
+  clangInput.placeholder = mode === "wsl"
+    ? "WSL 内 clang 路径；留空默认 /usr/bin/clang"
+    : "native 留空用 CLANG/clang";
+  if (mode === "wsl" && !clangInput.value.trim()) {
+    clangInput.value = "/usr/bin/clang";
+  }
 }
 
 function modelSettingsMode() {
@@ -721,6 +736,7 @@ modelSettingsModal.addEventListener("click", (event) => {
 });
 modelSettingsForm.elements.llm_mode.addEventListener("change", syncModelSettingsMode);
 modelSettingsForm.addEventListener("submit", saveModelSettings);
+form.elements.clang_mode.addEventListener("change", syncClangMode);
 
 for (const tab of document.querySelectorAll(".tab")) {
   tab.addEventListener("click", () => switchTab(tab.dataset.tab));

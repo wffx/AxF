@@ -286,6 +286,28 @@ class FrontendServerTest(unittest.TestCase):
         self.assertEqual(_selected_artifacts({"artifacts": ""}), set())
         self.assertEqual(_selected_artifacts({}), set())
 
+    def test_sanitize_wsl_clang_defaults_without_rewriting_windows_paths(self) -> None:
+        config = _sanitize_task_config(
+            {
+                "repo": r"C:\Users\yufei\linux-7.0",
+                "db": r"C:\Users\yufei\linux-7.0\.vscode\BROWSE.VC.DB",
+                "knowledge_dir": r"C:\Users\yufei\AxF\workspace\web\tasks\old",
+                "function": "can_send",
+                "clang_mode": "wsl",
+                "clang": "",
+            }
+        )
+
+        self.assertEqual(config["clang"], "/usr/bin/clang")
+        self.assertEqual(config["repo"], r"C:\Users\yufei\linux-7.0")
+        self.assertEqual(config["db"], r"C:\Users\yufei\linux-7.0\.vscode\BROWSE.VC.DB")
+        self.assertEqual(config["knowledge_dir"], r"C:\Users\yufei\AxF\workspace\web\tasks\old")
+
+    def test_sanitize_wsl_clang_preserves_existing_clang_value(self) -> None:
+        config = _sanitize_task_config({"clang_mode": "wsl", "clang": r"C:\LLVM\bin\clang.exe"})
+
+        self.assertEqual(config["clang"], r"C:\LLVM\bin\clang.exe")
+
     def test_task_store_rejects_empty_artifact_selection_before_starting_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = TaskStore(Path(tmp))

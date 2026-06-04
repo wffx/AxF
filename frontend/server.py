@@ -851,6 +851,8 @@ def quote_env_value(value: str) -> str:
 def _sanitize_task_config(config: dict[str, Any]) -> dict[str, Any]:
     safe = dict(config)
     safe.pop("api_key", None)
+    if str(safe.get("clang_mode") or "").strip().lower() == "wsl" and not str(safe.get("clang") or "").strip():
+        safe["clang"] = "/usr/bin/clang"
     return safe
 
 
