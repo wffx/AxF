@@ -11,6 +11,7 @@ services:
       - ..:/workspace
       - ${LINUX_ROOT:-../../linux-7.0}:/linux-7.0
     environment:
+      AXF_RUNTIME: docker
       PYTHONPATH: /workspace:/workspace/knowledge_base
     stdin_open: true
     tty: true
@@ -26,6 +27,7 @@ services:
       - ..:/workspace
       - ${LINUX_ROOT:-../../linux-7.0}:/linux-7.0
     environment:
+      AXF_RUNTIME: docker
       PYTHONPATH: /workspace:/workspace/knowledge_base
     ports:
       - "${AXF_WEB_PORT:-8787}:8787"

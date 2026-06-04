@@ -202,6 +202,18 @@ rg --version
 python -m unittest discover -s tests
 ```
 
+## 业务日志
+
+Web 页面任务日志和 `workspace/*/tasks/<task-id>/task.log` 会在任务开始时写入运行环境摘要，包括：
+
+- 是否运行在 Docker 容器中。
+- 项目目录和任务目录。
+- Linux 源码挂载路径是否存在。
+- Python / rg / clang 可见性。
+- LLM 模式、模型、Chat Completions URL 和 API key 环境变量是否已设置。
+
+日志只记录 API key 环境变量名和“已设置/未设置”状态，不记录密钥值。
+
 ## Terminal CLI 示例
 
 离线抽取知识产物：

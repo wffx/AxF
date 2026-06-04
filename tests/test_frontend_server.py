@@ -19,6 +19,7 @@ from frontend.server import (
     _harness_events_for_step,
     _harness_summary,
     ensure_rg_available,
+    runtime_log_lines,
     save_model_settings_to_local_env,
     _sanitize_task_config,
     _selected_artifacts,
@@ -85,6 +86,42 @@ class FrontendServerTest(unittest.TestCase):
         safe = _sanitize_task_config(config)
 
         self.assertNotIn("api_key", safe)
+
+    def test_runtime_log_lines_report_docker_context_without_secret_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "linux-7.0").mkdir()
+
+            def fake_which(name: str) -> str | None:
+                if name in {"rg", "clang-14"}:
+                    return f"/usr/bin/{name}"
+                return None
+
+            with (
+                mock.patch("frontend.server.PROJECT_ROOT", root),
+                mock.patch("frontend.server._running_in_docker", return_value=True),
+                mock.patch("frontend.server.shutil.which", side_effect=fake_which),
+                mock.patch.dict(os.environ, {"API_KEY": "sk-secret"}, clear=True),
+            ):
+                lines = runtime_log_lines(
+                    {
+                        "repo": "linux-7.0",
+                        "llm_mode": "api",
+                        "model": "glm-5.1",
+                        "chat_url": "https://example.invalid/v1/chat/completions",
+                        "api_key_env": "API_KEY",
+                    },
+                    root / "task",
+                )
+
+        text = "\n".join(lines)
+        self.assertIn("运行环境：Docker 容器", text)
+        self.assertIn("Linux 源码：linux-7.0 ->", text)
+        self.assertIn("（存在）", text)
+        self.assertIn("rg：/usr/bin/rg", text)
+        self.assertIn("Clang：/usr/bin/clang-14", text)
+        self.assertIn("API key：API_KEY 已设置", text)
+        self.assertNotIn("sk-secret", text)
 
     def test_task_store_drops_legacy_direct_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -31,6 +31,8 @@ RUN apt-get update \
     fi \
     && rm -rf /var/lib/apt/lists/*
 
+ENV AXF_RUNTIME=docker
+
 WORKDIR /workspace
 
 COPY docker/entrypoint.sh /usr/local/bin/axf-entrypoint

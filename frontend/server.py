@@ -179,6 +179,8 @@ class TaskStore:
 
         self._set(task_id, status="running")
         self._event(task_id, "init", f"任务已开始：{task.config.get('function')}")
+        for line in runtime_log_lines(task.config, task.task_dir):
+            self._log(task_id, line)
         (task.task_dir / "task.json").write_text(
             json.dumps({"id": task.id, "config": task.config, "steps": [s.to_json() for s in steps]}, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -270,6 +272,53 @@ class TaskStore:
 
     def _step_env(self, task_id: str) -> dict[str, str]:
         return os.environ.copy()
+
+
+def runtime_log_lines(config: dict[str, Any], task_dir: Path) -> list[str]:
+    lines = [
+        "运行环境：Docker 容器" if _running_in_docker() else "运行环境：本机进程",
+        f"项目目录：{PROJECT_ROOT}",
+        f"任务目录：{task_dir}",
+    ]
+
+    repo = str(config.get("repo") or "").strip()
+    if repo:
+        repo_path = _resolve_user_path(repo)
+        state = "存在" if repo_path.exists() else "不存在"
+        lines.append(f"Linux 源码：{repo} -> {repo_path}（{state}）")
+
+    lines.append(f"Python：{sys.executable} ({sys.version.split()[0]})")
+    lines.append(f"rg：{shutil.which('rg') or '未找到'}")
+    clang = str(config.get("clang") or os.environ.get("CLANG") or "").strip()
+    clang = clang or shutil.which("clang-14") or shutil.which("clang") or ""
+    lines.append(f"Clang：{clang or '未配置'}")
+
+    llm_mode = str(config.get("llm_mode") or os.environ.get("LLM_MODE") or "api").strip() or "api"
+    model = str(config.get("model") or os.environ.get("MODEL") or "").strip() or "未配置"
+    chat_url = str(
+        config.get("chat_url")
+        or os.environ.get("CHAT_COMPLETIONS_URL")
+        or os.environ.get("API_BASE_URL")
+        or os.environ.get("BASE_URL")
+        or ""
+    ).strip()
+    api_key_env = str(config.get("api_key_env") or "API_KEY").strip() or "API_KEY"
+    api_key_state = "已设置" if os.environ.get(api_key_env) else "未设置"
+    lines.append(f"LLM：mode={llm_mode}, model={model}, chat_url={chat_url or '未配置'}")
+    lines.append(f"API key：{api_key_env} {api_key_state}")
+    return lines
+
+
+def _running_in_docker() -> bool:
+    if os.environ.get("AXF_RUNTIME") == "docker":
+        return True
+    if Path("/.dockerenv").exists():
+        return True
+    try:
+        cgroup = Path("/proc/1/cgroup").read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return any(marker in cgroup for marker in ("docker", "containerd", "kubepods"))
 
 
 def ensure_rg_available(log: Callable[[str], None] | None = None) -> None:

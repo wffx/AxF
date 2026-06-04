@@ -27,6 +27,7 @@ from frontend.server import (
     default_config,
     ensure_rg_available,
     load_local_env,
+    runtime_log_lines,
 )
 
 
@@ -121,6 +122,8 @@ class TerminalTaskRunner:
         task_dir.mkdir(parents=True, exist_ok=True)
         self._write_task_json(task_id, task_dir, config, steps)
         self._event(task_dir, "init", f"任务已开始：{config.get('function')}")
+        for line in runtime_log_lines(config, task_dir):
+            self._log(task_dir, line, echo=True)
         try:
             ensure_rg_available(log=lambda message: self._log(task_dir, message, echo=True))
         except RuntimeError as exc:
