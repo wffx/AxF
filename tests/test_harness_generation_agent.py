@@ -3,14 +3,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import ssl
 import subprocess
 import tempfile
+import urllib.error
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from agents.harness_generation.agent import (
     CompileResult,
+    CoverageResult,
     HarnessGenerationError,
     PROJECT_ROOT,
     RunResult,
@@ -23,6 +26,7 @@ from agents.harness_generation.agent import (
     compile_commands_for_mode,
     compile_harness,
     compile_skip_reason,
+    coverage_compact_summary,
     ensure_required_harness_payload,
     html_response_error,
     merge_repair_payload,
@@ -34,6 +38,8 @@ from agents.harness_generation.agent import (
     resolve_clang,
     resolve_cli_executable,
     run_harness,
+    is_retryable_url_error,
+    update_spec_coverage,
     update_spec_compile,
     update_spec_run,
     wsl_shell_command,
@@ -145,6 +151,13 @@ class HarnessGenerationAgentTest(unittest.TestCase):
         self.assertEqual(urlopen.call_count, 2)
         self.assertIn("第 1/2 次", text)
         self.assertIn("assistant", text)
+
+    def test_ssl_eof_url_error_is_retryable(self) -> None:
+        error = urllib.error.URLError(
+            ssl.SSLEOFError("[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol")
+        )
+
+        self.assertTrue(is_retryable_url_error(error))
 
     def test_build_opencode_command_uses_nga_run_dir_and_model(self) -> None:
         with mock.patch("agents.harness_generation.agent.shutil.which", return_value="nga"):
@@ -1051,6 +1064,55 @@ retry log follows
             self.assertEqual(spec["status"], "run_succeeded")
             self.assertEqual(spec["run"]["status"], "success")
             self.assertEqual(spec["run"]["seconds"], 10)
+
+    def test_coverage_compact_summary_extracts_line_percent(self) -> None:
+        summary = {
+            "data": [
+                {
+                    "totals": {
+                        "lines": {"count": 10, "covered": 7, "percent": 70.0},
+                        "functions": {"count": 2, "covered": 1, "percent": 50.0},
+                    }
+                }
+            ]
+        }
+
+        compact = coverage_compact_summary(summary)
+
+        self.assertEqual(compact["line_percent"], 70.0)
+        self.assertEqual(compact["metrics"]["lines"]["covered"], 7)
+
+    def test_update_spec_coverage_writes_summary_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            coverage_dir = root / "coverage"
+            coverage_dir.mkdir()
+            log_path = coverage_dir / "coverage.log"
+            summary_path = coverage_dir / "summary.json"
+            report_path = coverage_dir / "report.md"
+            log_path.write_text("ok\n", encoding="utf-8")
+            summary_path.write_text("{}\n", encoding="utf-8")
+            report_path.write_text("# Coverage\n", encoding="utf-8")
+            payload = {"harness_spec": {"status": "run_succeeded", "diagnostics": []}}
+            result = CoverageResult(
+                status="success",
+                message="coverage calculated",
+                command=["llvm-cov", "export"],
+                returncode=0,
+                log_path=log_path,
+                summary_path=summary_path,
+                report_path=report_path,
+                percent=42.5,
+                details={"metrics": {"lines": {"covered": 17, "count": 40, "percent": 42.5}}},
+            )
+
+            update_spec_coverage(root, payload, result)
+
+            spec = payload["harness_spec"]
+            self.assertEqual(spec["coverage"]["status"], "success")
+            self.assertEqual(spec["coverage"]["line_percent"], 42.5)
+            self.assertEqual(spec["coverage"]["summary"], "coverage/summary.json")
+            self.assertEqual(spec["coverage"]["report"], "coverage/report.md")
 
     def test_repair_timeout_becomes_compile_failed_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

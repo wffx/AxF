@@ -1,6 +1,7 @@
 FROM python:3.12-slim-bookworm
 
-ARG INSTALL_CODEX_CLI=0
+ARG INSTALL_CODEX_CLI=1
+ARG CODEX_CLI_PACKAGE=@openai/codex
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -22,12 +23,14 @@ RUN apt-get update \
         git \
         libclang-rt-14-dev \
         lld-14 \
+        llvm-14 \
         make \
         ripgrep \
         xz-utils \
     && if [ "$INSTALL_CODEX_CLI" = "1" ]; then \
         apt-get install -y --no-install-recommends nodejs npm \
-        && npm install -g @openai/codex; \
+        && npm install -g "$CODEX_CLI_PACKAGE" \
+        && codex --version; \
     fi \
     && rm -rf /var/lib/apt/lists/*
 

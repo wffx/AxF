@@ -7,9 +7,10 @@
 Docker 镜像包含：
 
 - Python 3.12
-- clang-14 / lld-14 / libFuzzer runtime
+- clang-14 / lld-14 / llvm-cov / llvm-profdata / libFuzzer runtime
 - build-essential / make / git
 - ripgrep
+- Codex CLI
 - Python 标准库 sqlite3 支持
 
 容器用于运行：
@@ -20,6 +21,7 @@ Docker 镜像包含：
 - Harness 生成 Agent
 - 本地测试
 - clang 编译和 libFuzzer smoke test
+- 短跑后的覆盖率计算
 
 ## 文件
 
@@ -60,7 +62,7 @@ export LINUX_ROOT=/absolute/path/to/linux-7.0
 
 ## 网络和 LLM
 
-Compose 不注入显式代理变量：
+Compose 默认不注入显式代理变量：
 
 ```text
 HTTP_PROXY
@@ -70,6 +72,20 @@ NO_PROXY
 ```
 
 如果 Web 页面里点“生成 Fuzz Harness”并使用远端模型，容器必须能访问外网 HTTPS。推荐在 Clash Verge 中开启 TUN，让 Docker Desktop 的 Linux VM 流量被系统级接管。
+
+如果 TUN 没有接管 Docker 容器流量，也可以显式让 AxF 容器走宿主机代理。Clash Verge 常见端口是 `7897`：
+
+```bash
+AXF_DOCKER_PROXY=http://host.docker.internal:7897 \
+  docker --context desktop-linux compose -f docker/docker-compose.yml up -d axf-web
+```
+
+进入 dev 容器时同样可以带上：
+
+```bash
+AXF_DOCKER_PROXY=http://host.docker.internal:7897 \
+  docker --context desktop-linux compose -f docker/docker-compose.yml run --rm dev
+```
 
 离线功能不需要外网，包括：
 
@@ -91,7 +107,8 @@ NO_PROXY
 验证容器 HTTPS 出站：
 
 ```bash
-docker --context desktop-linux compose -f docker/docker-compose.yml run --rm dev \
+AXF_DOCKER_PROXY=http://host.docker.internal:7897 \
+  docker --context desktop-linux compose -f docker/docker-compose.yml run --rm dev \
   python -c "import urllib.request; print(urllib.request.urlopen('https://pypi.tuna.tsinghua.edu.cn/simple/setuptools/', timeout=15).status)"
 ```
 
@@ -121,7 +138,7 @@ MODEL=glm-5.1
 
 ## Codex CLI
 
-Codex CLI 可以装进 Linux 容器，但默认不安装，也不挂载宿主机 `~/.codex`。
+AxF Docker 镜像默认安装 Codex CLI，但不挂载宿主机 `~/.codex`。
 
 原因：
 
@@ -131,20 +148,26 @@ Codex CLI 可以装进 Linux 容器，但默认不安装，也不挂载宿主机
 
 如果只是要让 Web 页面点生成，推荐继续使用 `.env.local` 中的 `CHAT_COMPLETIONS_URL` 和 `API_KEY`。
 
-如果确实要在开发容器里手动使用 Codex CLI，可以用可选 build arg 构建：
+构建镜像后可以验证：
 
 ```bash
-docker --context desktop-linux compose -f docker/docker-compose.yml build \
-  --build-arg INSTALL_CODEX_CLI=1 dev
+docker --context desktop-linux compose -f docker/docker-compose.yml run --rm dev codex --version
 ```
 
-之后进入容器自行登录：
+进入容器后自行登录：
 
 ```bash
 docker --context desktop-linux compose -f docker/docker-compose.yml run --rm dev codex login
 ```
 
 这条路径需要容器 HTTPS 出站正常。
+
+如果需要临时禁用 Codex CLI 安装，可以覆盖 build arg：
+
+```bash
+docker --context desktop-linux compose -f docker/docker-compose.yml build \
+  --build-arg INSTALL_CODEX_CLI=0 dev
+```
 
 ## 构建镜像
 
@@ -202,6 +225,7 @@ docker --context desktop-linux compose -f docker/docker-compose.yml run --rm dev
 python --version
 clang-14 --version
 rg --version
+codex --version
 ```
 
 运行测试：

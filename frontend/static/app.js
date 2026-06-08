@@ -47,9 +47,13 @@ const PHASE_LABELS = {
   harness_dict: "Fuzz 字典",
   harness_compile_log: "编译日志",
   harness_run_log: "10 秒运行日志",
+  harness_coverage_summary: "覆盖率摘要",
+  harness_coverage_report: "覆盖率报告",
+  harness_coverage_log: "覆盖率日志",
   harness_llm_transcript: "LLM 交互日志",
   harness_compile: "Harness 编译",
   harness_run: "libFuzzer 试跑",
+  harness_coverage: "覆盖率",
   complete: "完成",
   failed: "失败",
   cancelled: "已停止",
@@ -73,6 +77,9 @@ const ARTIFACT_LABELS = {
   harness_dict: "Fuzz 字典",
   harness_compile_log: "编译日志",
   harness_run_log: "10 秒运行日志",
+  harness_coverage_summary: "覆盖率摘要",
+  harness_coverage_report: "覆盖率报告",
+  harness_coverage_log: "覆盖率日志",
   harness_llm_transcript: "LLM 交互日志",
 };
 
@@ -89,6 +96,9 @@ const HARNESS_ARTIFACTS = new Set([
   "harness_dict",
   "harness_compile_log",
   "harness_run_log",
+  "harness_coverage_summary",
+  "harness_coverage_report",
+  "harness_coverage_log",
   "harness_llm_transcript",
 ]);
 
@@ -444,6 +454,7 @@ function taskStatusClass(task) {
   const harness = task.harness || {};
   const compile = harness.compile || {};
   const run = harness.run || {};
+  const coverage = harness.coverage || {};
   if (run.status === "failed" || run.status === "timeout" || harness.status === "runtime_failed") {
     return "failed";
   }
@@ -577,6 +588,7 @@ function taskPipelineSummary(task) {
   const harness = task.harness || {};
   const compile = harness.compile || {};
   const run = harness.run || {};
+  const coverage = harness.coverage || {};
 
   if (hasKnowledge) {
     stages.push("知识抽取");
@@ -591,6 +603,11 @@ function taskPipelineSummary(task) {
     stages.push(runStageLabel(run));
   } else if (artifacts.harness_run_log) {
     stages.push("10 秒试跑");
+  }
+  if (coverage.status) {
+    stages.push(coverageStageLabel(coverage));
+  } else if (artifacts.harness_coverage_report || artifacts.harness_coverage_summary) {
+    stages.push("覆盖率");
   }
   if (!stages.length) {
     stages.push("自定义任务");
@@ -629,6 +646,20 @@ function runStageLabel(run) {
     return `${seconds} 秒试跑失败`;
   }
   return `${seconds} 秒试跑 ${run.status}`;
+}
+
+function coverageStageLabel(coverage) {
+  if (coverage.status === "success") {
+    const percent = coverage.line_percent;
+    return percent === undefined || percent === null ? "覆盖率完成" : `行覆盖率 ${percent}%`;
+  }
+  if (coverage.status === "skipped") {
+    return "覆盖率跳过";
+  }
+  if (coverage.status === "failed") {
+    return "覆盖率失败";
+  }
+  return `覆盖率 ${coverage.status}`;
 }
 
 function taskDetail(task) {

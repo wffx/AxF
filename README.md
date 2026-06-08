@@ -238,6 +238,9 @@ workspace/terminal/tasks/<task_id>/
 - `harness/harness_spec.json`
 - `harness/compile.log`
 - `harness/run.log`
+- `harness/coverage/summary.json`
+- `harness/coverage/report.md`
+- `harness/coverage/coverage.log`
 - `harness/llm_transcript.md`（`nga` 模式记录所有交互；其他模式仅当模型回复中包含 `harness.c` 时写入）
 - `harness/nga_interactions/<attempt>/combined.rawoutput`（仅 `nga` 模式，按 oss-fuzz-gen 风格保存每次原始输出）
 - `harness/opencode_workspace/context/prompt.md`（仅 `nga` / `opencode` 模式）
@@ -249,9 +252,10 @@ workspace/terminal/tasks/<task_id>/
 1. `harness/harness_spec.json`：最终状态、编译状态和试跑状态。
 2. `harness/compile.log`：编译失败原因。
 3. `harness/run.log`：10 秒 libFuzzer 试跑输出。
-4. `harness/opencode_workspace/context/prompt.md`：`nga` / `opencode` 模式下实际交给 code agent 读取的完整 prompt。
-5. `harness/nga_interactions/<attempt>/`：`nga` 模式按 oss-fuzz-gen 的 raw output 思路保存每次尝试的 `prompt.md`、`stdout.rawoutput`、`stderr.rawoutput`、`combined.rawoutput` 和 `metadata.json`。
-6. `harness/llm_transcript.md`：`nga` 模式会记录每次请求、CLI 原始输出、错误和重试；其他模式只记录“模型返回了 `harness.c`”的有效 harness 输出。非 `nga` 模式下这个文件不存在时，不一定代表没有调用模型，更常见的是模型只返回了错误说明、无效 JSON、权限提示或没有 `harness.c` 的 JSON。
+4. `harness/coverage/report.md`：短跑后的覆盖率摘要。
+5. `harness/opencode_workspace/context/prompt.md`：`nga` / `opencode` 模式下实际交给 code agent 读取的完整 prompt。
+6. `harness/nga_interactions/<attempt>/`：`nga` 模式按 oss-fuzz-gen 的 raw output 思路保存每次尝试的 `prompt.md`、`stdout.rawoutput`、`stderr.rawoutput`、`combined.rawoutput` 和 `metadata.json`。
+7. `harness/llm_transcript.md`：`nga` 模式会记录每次请求、CLI 原始输出、错误和重试；其他模式只记录“模型返回了 `harness.c`”的有效 harness 输出。非 `nga` 模式下这个文件不存在时，不一定代表没有调用模型，更常见的是模型只返回了错误说明、无效 JSON、权限提示或没有 `harness.c` 的 JSON。
 
 如果改完代码后页面状态仍然像旧版本一样显示，请重启前端服务；已启动的本地服务进程不会自动加载新代码。
 

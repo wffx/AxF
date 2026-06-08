@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import socket
+import ssl
 import stat
 import subprocess
 import sys
@@ -99,6 +101,23 @@ class RunResult:
         return self.returncode == 0 and not self.timed_out
 
 
+@dataclass(frozen=True)
+class CoverageResult:
+    status: str
+    message: str
+    command: list[str]
+    returncode: int
+    log_path: Path
+    summary_path: Path | None = None
+    report_path: Path | None = None
+    percent: float | None = None
+    details: dict[str, Any] | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.status == "success"
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Harness 生成 Agent：使用 LLM 基于知识库产物生成 libFuzzer 驱动")
     parser.add_argument("--function", required=True)
@@ -128,6 +147,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-compile", action="store_true", help="generate files without compile validation")
     parser.add_argument("--run-seconds", type=int, default=DEFAULT_RUN_SECONDS, help="run compiled fuzzer for this many seconds")
     parser.add_argument("--skip-run", action="store_true", help="skip the post-compile fuzzer run")
+    parser.add_argument("--skip-coverage", action="store_true", help="skip post-run coverage calculation")
     return parser.parse_args(argv)
 
 
@@ -436,7 +456,7 @@ def request_harness_json_with_api(
         except urllib.error.URLError as exc:
             error = f"请求模型失败（第 {request_attempt}/{max_retries + 1} 次）：{exc}"
             record_llm_transcript(transcript_path, record_only_harness=record_only_harness, interaction=attempt_label, model=model, messages=messages, error=error)
-            if is_timeout_error(exc) and request_attempt <= max_retries:
+            if is_retryable_url_error(exc) and request_attempt <= max_retries:
                 log_llm_retry(error, request_attempt, max_retries)
                 continue
             raise HarnessGenerationError(error) from exc
@@ -976,6 +996,24 @@ def is_timeout_error(exc: urllib.error.URLError) -> bool:
     return "timed out" in str(exc).lower()
 
 
+def is_retryable_url_error(exc: urllib.error.URLError) -> bool:
+    if is_timeout_error(exc):
+        return True
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, (ConnectionResetError, ConnectionAbortedError, ssl.SSLError)):
+        return True
+    text = str(exc).lower()
+    retryable_markers = [
+        "unexpected_eof_while_reading",
+        "eof occurred in violation of protocol",
+        "ssl_error_syscall",
+        "connection reset",
+        "connection aborted",
+        "temporarily unavailable",
+    ]
+    return any(marker in text for marker in retryable_markers)
+
+
 def normalize_chat_url(value: str) -> str:
     url = (value or "").strip()
     if not url:
@@ -1493,7 +1531,17 @@ def run_after_compile(
     status = "success" if run_result.ok else "timeout" if run_result.timed_out else "failed"
     message = f"{run_result.seconds} second run succeeded" if run_result.ok else "fuzzer run failed"
     update_spec_run(output_dir, payload, run_result, status, message)
-    return payload, _merge_written(written, [run_result.log_path])
+    written = _merge_written(written, [run_result.log_path])
+    if run_result.ok:
+        coverage_result = calculate_coverage(output_dir, args)
+        update_spec_coverage(output_dir, payload, coverage_result)
+        coverage_paths = [coverage_result.log_path]
+        if coverage_result.summary_path:
+            coverage_paths.append(coverage_result.summary_path)
+        if coverage_result.report_path:
+            coverage_paths.append(coverage_result.report_path)
+        written = _merge_written(written, coverage_paths)
+    return payload, written
 
 
 def finish_compile(
@@ -1773,6 +1821,270 @@ def run_harness_wsl(output_dir: Path, args: argparse.Namespace, seconds: int) ->
         return RunResult(command, 127, output, log_path, seconds)
 
 
+def calculate_coverage(output_dir: Path, args: argparse.Namespace) -> CoverageResult:
+    coverage_dir = output_dir / "coverage"
+    coverage_dir.mkdir(parents=True, exist_ok=True)
+    log_path = coverage_dir / "coverage.log"
+    summary_path = coverage_dir / "summary.json"
+    report_path = coverage_dir / "report.md"
+    seconds = max(1, int(args.run_seconds))
+
+    if getattr(args, "skip_coverage", False):
+        result = CoverageResult("skipped", "coverage skipped by --skip-coverage", [], 0, log_path)
+        write_coverage_log(result, ["coverage skipped by --skip-coverage"])
+        return result
+    if clang_mode(args) == "wsl":
+        result = CoverageResult("skipped", "coverage is not supported in WSL mode yet", [], 0, log_path)
+        write_coverage_log(result, ["coverage is not supported in WSL mode yet"])
+        return result
+    if os.name == "nt":
+        result = CoverageResult("skipped", "coverage is not supported in native Windows mode yet", [], 0, log_path)
+        write_coverage_log(result, ["coverage is not supported in native Windows mode yet"])
+        return result
+
+    clang = resolve_clang(args)
+    profdata = resolve_llvm_tool("llvm-profdata", clang)
+    cov = resolve_llvm_tool("llvm-cov", clang)
+    if not profdata or not cov:
+        missing = []
+        if not profdata:
+            missing.append("llvm-profdata")
+        if not cov:
+            missing.append("llvm-cov")
+        message = "coverage skipped because tools are missing: " + ", ".join(missing)
+        result = CoverageResult("skipped", message, [], 127, log_path)
+        write_coverage_log(result, [message])
+        return result
+
+    binary_name = "fuzzer_coverage"
+    compile_commands = coverage_compile_command_variants(clang, binary_name)
+    logs: list[str] = ["# Coverage calculation", ""]
+    compile_result: subprocess.CompletedProcess[str] | None = None
+    last_command: list[str] = []
+    for index, command in enumerate(compile_commands, start=1):
+        last_command = command
+        logs.extend([f"## compile coverage binary {index}/{len(compile_commands)}", "$ " + " ".join(command), ""])
+        compile_result = run_coverage_subprocess(command, output_dir, max(1, int(args.compile_timeout)))
+        logs.extend([(compile_result.stdout or "").rstrip(), f"returncode: {compile_result.returncode}", ""])
+        if compile_result.returncode == 0:
+            break
+    if compile_result is None or compile_result.returncode != 0:
+        message = "coverage binary compile failed"
+        result = CoverageResult("failed", message, last_command, compile_result.returncode if compile_result else 127, log_path)
+        write_coverage_log(result, logs)
+        return result
+
+    profraw_path = coverage_dir / "fuzzer.profraw"
+    profdata_path = coverage_dir / "fuzzer.profdata"
+    coverage_runs = max(1, min(1000, seconds * 100))
+    run_command = [f"./{binary_name}", f"-runs={coverage_runs}", "-max_len=4096"]
+    seed_dir = output_dir / "seed_corpus"
+    if seed_dir.exists():
+        run_command.append("seed_corpus")
+    logs.extend(["## run coverage binary", "$ " + " ".join(run_command), ""])
+    env = os.environ.copy()
+    env.setdefault("ASAN_OPTIONS", "detect_leaks=0")
+    env["LLVM_PROFILE_FILE"] = str(profraw_path)
+    run_timeout = max(seconds + 15, seconds * 3, 30)
+    run_result = run_coverage_subprocess(run_command, output_dir, run_timeout, env=env)
+    logs.extend([(run_result.stdout or "").rstrip(), f"returncode: {run_result.returncode}", ""])
+    if run_result.returncode != 0:
+        message = "coverage run failed"
+        result = CoverageResult("failed", message, run_command, run_result.returncode, log_path)
+        write_coverage_log(result, logs)
+        return result
+    if not profraw_path.exists():
+        message = "coverage run did not produce a profraw file"
+        result = CoverageResult("failed", message, run_command, 1, log_path)
+        write_coverage_log(result, logs)
+        return result
+
+    merge_command = [profdata, "merge", "-sparse", str(profraw_path), "-o", str(profdata_path)]
+    logs.extend(["## merge profile", "$ " + " ".join(merge_command), ""])
+    merge_result = run_coverage_subprocess(merge_command, output_dir, max(10, int(args.compile_timeout)))
+    logs.extend([(merge_result.stdout or "").rstrip(), f"returncode: {merge_result.returncode}", ""])
+    if merge_result.returncode != 0:
+        message = "llvm-profdata merge failed"
+        result = CoverageResult("failed", message, merge_command, merge_result.returncode, log_path)
+        write_coverage_log(result, logs)
+        return result
+
+    export_command = [cov, "export", "--summary-only", f"./{binary_name}", f"-instr-profile={profdata_path}"]
+    logs.extend(["## export coverage summary", "$ " + " ".join(export_command), ""])
+    export_result = run_coverage_subprocess(export_command, output_dir, max(10, int(args.compile_timeout)))
+    logs.extend([f"returncode: {export_result.returncode}", ""])
+    if export_result.returncode != 0:
+        logs.append((export_result.stdout or "").rstrip())
+        message = "llvm-cov export failed"
+        result = CoverageResult("failed", message, export_command, export_result.returncode, log_path)
+        write_coverage_log(result, logs)
+        return result
+
+    try:
+        summary = json.loads(export_result.stdout or "{}")
+    except json.JSONDecodeError:
+        message = "llvm-cov export returned invalid JSON"
+        result = CoverageResult("failed", message, export_command, 1, log_path)
+        write_coverage_log(result, logs)
+        return result
+
+    line_percent = coverage_line_percent(summary)
+    compact_summary = coverage_compact_summary(summary)
+    summary_path.write_text(json.dumps(compact_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    report_path.write_text(coverage_markdown_report(compact_summary), encoding="utf-8")
+    message = "coverage calculated"
+    result = CoverageResult(
+        "success",
+        message,
+        export_command,
+        0,
+        log_path,
+        summary_path=summary_path,
+        report_path=report_path,
+        percent=line_percent,
+        details=compact_summary,
+    )
+    write_coverage_log(result, logs)
+    return result
+
+
+def resolve_llvm_tool(tool: str, clang: str) -> str:
+    clang_name = Path(clang).name
+    suffix_match = re.search(r"-(\d+)$", clang_name)
+    names: list[str] = []
+    if suffix_match:
+        names.append(f"{tool}-{suffix_match.group(1)}")
+    names.append(tool)
+    candidates: list[str] = []
+    if clang and Path(clang).is_absolute():
+        clang_dir = Path(clang).parent
+        candidates.extend(str(clang_dir / name) for name in names)
+    candidates.extend(names)
+    for candidate in candidates:
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+        path = Path(candidate)
+        if path.is_file():
+            return str(path)
+    return ""
+
+
+def coverage_compile_command_variants(clang: str, binary_name: str) -> list[list[str]]:
+    sanitizer_sets = [
+        "fuzzer",
+        "fuzzer,address",
+        "fuzzer,address,undefined",
+    ]
+    return [
+        [
+            clang,
+            "-std=gnu11",
+            "-fprofile-instr-generate",
+            "-fcoverage-mapping",
+            f"-fsanitize={sanitizers}",
+            "harness.c",
+            "mocks.c",
+            "-I.",
+            "-o",
+            binary_name,
+        ]
+        for sanitizers in sanitizer_sets
+    ]
+
+
+def run_coverage_subprocess(
+    command: list[str],
+    cwd: Path,
+    timeout: int,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            command,
+            cwd=cwd,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=max(1, timeout),
+            env=env,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = (exc.stdout or "") + (exc.stderr or "")
+        output += f"\ncoverage command timed out after {timeout} seconds\n"
+        return subprocess.CompletedProcess(command, 124, output)
+    except OSError as exc:
+        return subprocess.CompletedProcess(command, 127, f"failed to start coverage command: {exc}\n")
+
+
+def coverage_line_percent(summary: dict[str, Any]) -> float | None:
+    totals = coverage_totals(summary)
+    lines = totals.get("lines") if isinstance(totals.get("lines"), dict) else {}
+    percent = lines.get("percent") if isinstance(lines, dict) else None
+    try:
+        return round(float(percent), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def coverage_totals(summary: dict[str, Any]) -> dict[str, Any]:
+    data = summary.get("data")
+    if isinstance(data, list) and data:
+        first = data[0]
+        if isinstance(first, dict) and isinstance(first.get("totals"), dict):
+            return first["totals"]
+    totals = summary.get("totals")
+    return totals if isinstance(totals, dict) else {}
+
+
+def coverage_compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    totals = coverage_totals(summary)
+    metrics: dict[str, Any] = {}
+    for name in ["lines", "functions", "regions", "branches"]:
+        value = totals.get(name)
+        if not isinstance(value, dict):
+            continue
+        metrics[name] = {
+            key: value.get(key)
+            for key in ["count", "covered", "notcovered", "percent"]
+            if key in value
+        }
+    return {
+        "status": "success",
+        "line_percent": coverage_line_percent(summary),
+        "metrics": metrics,
+    }
+
+
+def coverage_markdown_report(summary: dict[str, Any]) -> str:
+    metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+    lines = ["# Coverage Report", ""]
+    line_percent = summary.get("line_percent")
+    lines.extend([f"- Line coverage: {line_percent if line_percent is not None else 'unknown'}%", ""])
+    lines.extend(["| Metric | Covered | Total | Percent |", "| --- | ---: | ---: | ---: |"])
+    for name in ["lines", "functions", "regions", "branches"]:
+        item = metrics.get(name)
+        if not isinstance(item, dict):
+            continue
+        total = item.get("count", "")
+        covered = item.get("covered", "")
+        percent = item.get("percent", "")
+        lines.append(f"| {name} | {covered} | {total} | {percent} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def write_coverage_log(result: CoverageResult, lines: list[str]) -> None:
+    header = [
+        f"status: {result.status}",
+        f"message: {result.message}",
+        f"returncode: {result.returncode}",
+        "",
+    ]
+    result.log_path.write_text("\n".join(header + lines).rstrip() + "\n", encoding="utf-8")
+
+
 def build_repair_prompt(
     context: dict[str, str],
     output_dir: Path,
@@ -1955,6 +2267,34 @@ def update_spec_run(
     diagnostics = spec.setdefault("diagnostics", [])
     if isinstance(diagnostics, list) and message not in diagnostics:
         diagnostics.append(message)
+    spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload["harness_spec"] = spec
+
+
+def update_spec_coverage(output_dir: Path, payload: dict[str, Any], result: CoverageResult) -> None:
+    spec_path = output_dir / "harness_spec.json"
+    spec = read_json_object(spec_path)
+    if not spec:
+        raw_spec = payload.get("harness_spec")
+        spec = raw_spec if isinstance(raw_spec, dict) else {}
+    coverage_info: dict[str, Any] = {
+        "status": result.status,
+        "message": result.message,
+        "returncode": result.returncode,
+        "log": result.log_path.relative_to(output_dir).as_posix(),
+    }
+    if result.summary_path:
+        coverage_info["summary"] = result.summary_path.relative_to(output_dir).as_posix()
+    if result.report_path:
+        coverage_info["report"] = result.report_path.relative_to(output_dir).as_posix()
+    if result.percent is not None:
+        coverage_info["line_percent"] = result.percent
+    if result.details:
+        coverage_info["metrics"] = result.details.get("metrics", {})
+    spec["coverage"] = coverage_info
+    diagnostics = spec.setdefault("diagnostics", [])
+    if isinstance(diagnostics, list) and result.message not in diagnostics:
+        diagnostics.append(result.message)
     spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
     payload["harness_spec"] = spec
 

@@ -963,6 +963,9 @@ def _artifact_label(name: str) -> str:
         "harness_dict": "Fuzz 字典",
         "harness_compile_log": "编译日志",
         "harness_run_log": "10 秒运行日志",
+        "harness_coverage_summary": "覆盖率摘要",
+        "harness_coverage_report": "覆盖率报告",
+        "harness_coverage_log": "覆盖率日志",
         "harness_llm_transcript": "LLM 交互日志",
     }.get(name, name)
 
@@ -987,6 +990,9 @@ def _extra_artifacts_for_step(step: PipelineStep) -> list[tuple[str, Path]]:
         ("harness_dict", harness_dir / "dict.txt"),
         ("harness_compile_log", harness_dir / "compile.log"),
         ("harness_run_log", harness_dir / "run.log"),
+        ("harness_coverage_summary", harness_dir / "coverage" / "summary.json"),
+        ("harness_coverage_report", harness_dir / "coverage" / "report.md"),
+        ("harness_coverage_log", harness_dir / "coverage" / "coverage.log"),
         ("harness_llm_transcript", harness_dir / "llm_transcript.md"),
     ]
     return [(name, path) for name, path in candidates if path.exists()]
@@ -999,6 +1005,7 @@ def _harness_events_for_step(step: PipelineStep) -> list[dict[str, str]]:
     events: list[dict[str, str]] = []
     compile_info = spec.get("compile") if isinstance(spec.get("compile"), dict) else {}
     run_info = spec.get("run") if isinstance(spec.get("run"), dict) else {}
+    coverage_info = spec.get("coverage") if isinstance(spec.get("coverage"), dict) else {}
     if compile_info:
         events.append(
             {
@@ -1015,6 +1022,14 @@ def _harness_events_for_step(step: PipelineStep) -> list[dict[str, str]]:
                 "artifact": "harness_run_log",
             }
         )
+    if coverage_info:
+        events.append(
+            {
+                "phase": "harness_coverage",
+                "message": _coverage_event_message(coverage_info),
+                "artifact": "harness_coverage_report" if coverage_info.get("report") else "harness_coverage_log",
+            }
+        )
     return events
 
 
@@ -1025,6 +1040,7 @@ def _harness_summary(task_dir: Path) -> dict[str, Any]:
         "classification": spec.get("classification", ""),
         "compile": spec.get("compile") if isinstance(spec.get("compile"), dict) else {},
         "run": spec.get("run") if isinstance(spec.get("run"), dict) else {},
+        "coverage": spec.get("coverage") if isinstance(spec.get("coverage"), dict) else {},
     }
 
 
@@ -1136,6 +1152,21 @@ def _run_event_message(run_info: dict[str, Any]) -> str:
     if status == "skipped":
         return f"libFuzzer 试跑跳过：{message or '未执行试跑'}"
     return f"libFuzzer 试跑状态：{status or '未知'}"
+
+
+def _coverage_event_message(coverage_info: dict[str, Any]) -> str:
+    status = str(coverage_info.get("status") or "")
+    percent = coverage_info.get("line_percent")
+    message = str(coverage_info.get("message") or "").strip()
+    if status == "success":
+        if percent is not None:
+            return f"覆盖率计算完成：行覆盖率 {percent}%，报告见覆盖率报告"
+        return "覆盖率计算完成，报告见覆盖率报告"
+    if status == "skipped":
+        return f"覆盖率计算跳过：{message or '未执行覆盖率计算'}"
+    if status == "failed":
+        return f"覆盖率计算失败：{message or '请查看覆盖率日志'}"
+    return f"覆盖率状态：{status or '未知'}"
 
 
 def _add_optional(command: list[str], flag: str, value: object) -> None:

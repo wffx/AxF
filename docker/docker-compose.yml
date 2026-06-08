@@ -5,6 +5,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      args:
+        INSTALL_CODEX_CLI: "1"
     image: axf-dev
     working_dir: /workspace
     volumes:
@@ -15,6 +17,10 @@ services:
       AXF_CONTAINER_SOURCE_ROOT: /linux-7.0
       CLANG: /usr/bin/clang-14
       PYTHONPATH: /workspace:/workspace/knowledge_base
+      HTTP_PROXY: ${AXF_DOCKER_PROXY:-}
+      HTTPS_PROXY: ${AXF_DOCKER_PROXY:-}
+      ALL_PROXY: ${AXF_DOCKER_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
     stdin_open: true
     tty: true
     command: bash
@@ -24,6 +30,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      args:
+        INSTALL_CODEX_CLI: "1"
     working_dir: /workspace
     volumes:
       - ..:/workspace
@@ -33,6 +41,10 @@ services:
       AXF_CONTAINER_SOURCE_ROOT: /linux-7.0
       CLANG: /usr/bin/clang-14
       PYTHONPATH: /workspace:/workspace/knowledge_base
+      HTTP_PROXY: ${AXF_DOCKER_PROXY:-}
+      HTTPS_PROXY: ${AXF_DOCKER_PROXY:-}
+      ALL_PROXY: ${AXF_DOCKER_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
     ports:
       - "${AXF_WEB_PORT:-8787}:8787"
     command:

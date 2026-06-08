@@ -934,6 +934,15 @@ workspace/web/tasks/<task_id>/generated_harness.txt
 `harness/run.log`
 : 编译成功后的 10 秒试跑日志。包含 fuzzer 启动命令、退出码和 libFuzzer 输出。若 `harness_spec.json` 中 `run.status` 为 `failed` 或 `timeout`，优先看这个文件。
 
+`harness/coverage/summary.json`
+: 编译成功且 libFuzzer 短跑成功后生成的覆盖率机器摘要。Agent 会用 coverage instrumentation 重新编译一个覆盖率版本，运行同样的短跑语料，再通过 `llvm-profdata` 和 `llvm-cov export --summary-only` 计算行、函数、region、branch 覆盖率。
+
+`harness/coverage/report.md`
+: 覆盖率 Markdown 摘要，前端会作为 `覆盖率报告` 产物展示。
+
+`harness/coverage/coverage.log`
+: 覆盖率计算日志。包含 coverage binary 编译、profile merge 和 llvm-cov export 的命令与退出码。覆盖率计算失败不会把已经编译和试跑成功的 harness 任务判失败，应优先看这个日志定位工具缺失或 instrumentation 编译失败。
+
 `harness/llm_transcript.md`
 : LLM 交互日志。`nga` 模式记录所有交互，包括请求 prompt、CLI 原始输出、stderr、非零退出码、非法 JSON 和重试；API、`opencode`、`hac`、`claude` 模式只记录模型返回了 `harness.c` 的交互。API key 不写入该文件，Chat Completions URL 不写入该文件。非 `nga` 模式下这个文件不存在时，优先检查 `task.log`、`llm_response.json` 和 `opencode_workspace/context/prompt.md`，不要把它当成“模型没有被调用”的唯一证据。
 
@@ -1149,12 +1158,12 @@ execution/run.log
 execution/result.json
 ```
 
-### 13.2 覆盖率与到达性 Agent
+### 13.2 长时间覆盖率与到达性 Agent
 
 职责：
 
-- 读取 fuzzer 二进制和运行产物。
-- 记录 edge count、coverage artifact 或等价覆盖指标。
+- 在现有 10 秒短跑覆盖率基础上，读取 fuzzer 二进制和运行产物。
+- 针对更长 fuzz 任务记录 edge count、coverage artifact 或等价覆盖指标。
 - 判断目标函数是否实际被调用。
 - 禁止把只调用 mock、没有进入目标函数的 harness 标为成功。
 

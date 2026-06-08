@@ -465,6 +465,11 @@ class FrontendServerTest(unittest.TestCase):
             (harness_dir / "harness_spec.json").write_text("{}\n", encoding="utf-8")
             (harness_dir / "compile.log").write_text("ok\n", encoding="utf-8")
             (harness_dir / "run.log").write_text("ok\n", encoding="utf-8")
+            coverage_dir = harness_dir / "coverage"
+            coverage_dir.mkdir()
+            (coverage_dir / "summary.json").write_text("{}\n", encoding="utf-8")
+            (coverage_dir / "report.md").write_text("# Coverage\n", encoding="utf-8")
+            (coverage_dir / "coverage.log").write_text("ok\n", encoding="utf-8")
             (harness_dir / "llm_transcript.md").write_text("# LLM\n", encoding="utf-8")
             step = PipelineStep(
                 "harness_generation_agent",
@@ -482,6 +487,9 @@ class FrontendServerTest(unittest.TestCase):
                 "harness_spec",
                 "harness_compile_log",
                 "harness_run_log",
+                "harness_coverage_summary",
+                "harness_coverage_report",
+                "harness_coverage_log",
                 "harness_llm_transcript",
             ],
         )
@@ -492,7 +500,7 @@ class FrontendServerTest(unittest.TestCase):
             harness_dir = task_dir / "harness"
             harness_dir.mkdir()
             (harness_dir / "harness_spec.json").write_text(
-                '{"status":"run_succeeded","classification":"byte_parser","compile":{"status":"success"},"run":{"status":"success","seconds":10}}\n',
+                '{"status":"run_succeeded","classification":"byte_parser","compile":{"status":"success"},"run":{"status":"success","seconds":10},"coverage":{"status":"success","line_percent":66.7}}\n',
                 encoding="utf-8",
             )
 
@@ -501,8 +509,9 @@ class FrontendServerTest(unittest.TestCase):
         self.assertEqual(summary["status"], "run_succeeded")
         self.assertEqual(summary["compile"]["status"], "success")
         self.assertEqual(summary["run"]["seconds"], 10)
+        self.assertEqual(summary["coverage"]["line_percent"], 66.7)
 
-    def test_harness_events_expose_compile_and_libfuzzer_run(self) -> None:
+    def test_harness_events_expose_compile_libfuzzer_run_and_coverage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = Path(tmp)
             harness_dir = task_dir / "harness"
@@ -510,7 +519,8 @@ class FrontendServerTest(unittest.TestCase):
             (harness_dir / "harness_spec.json").write_text(
                 (
                     '{"compile":{"status":"success","attempts":[{"attempt":1}]},'
-                    '"run":{"status":"success","seconds":10,"returncode":0}}\n'
+                    '"run":{"status":"success","seconds":10,"returncode":0},'
+                    '"coverage":{"status":"success","line_percent":66.7,"report":"coverage/report.md"}}\n'
                 ),
                 encoding="utf-8",
             )
@@ -523,9 +533,10 @@ class FrontendServerTest(unittest.TestCase):
 
             events = _harness_events_for_step(step)
 
-        self.assertEqual([event["phase"] for event in events], ["harness_compile", "harness_run"])
+        self.assertEqual([event["phase"] for event in events], ["harness_compile", "harness_run", "harness_coverage"])
         self.assertIn("编译通过", events[0]["message"])
         self.assertIn("编译通过", events[1]["message"])
+        self.assertIn("66.7", events[2]["message"])
 
     def test_compile_failed_harness_is_not_a_completed_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
