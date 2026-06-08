@@ -1,0 +1,4 @@
+name: krepo-symbol
+executor: python
+entrypoint: integrations.krepo_adapter:run_symbol_skill
+default_lane: krepo

@@ -1624,11 +1624,14 @@ def compile_harness(output_dir: Path, args: argparse.Namespace, attempt: int) ->
 
 
 def resolve_clang(args: argparse.Namespace) -> str:
-    configured = getattr(args, "clang", "") or os.environ.get("CLANG") or ""
+    configured = getattr(args, "clang", "") or ""
     if configured:
         return configured
     if clang_mode(args) == "wsl":
         return "/usr/bin/clang"
+    configured = os.environ.get("CLANG") or ""
+    if configured:
+        return configured
     if os.name != "nt":
         homebrew_clang = Path("/opt/homebrew/opt/llvm/bin/clang")
         if homebrew_clang.exists():

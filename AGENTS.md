@@ -2,9 +2,10 @@
 
 ## 项目概览
 
-AxF 是一个面向 C 代码的 LLM fuzz harness 生成与验证工具。项目包含后端
-agent、Web 前端、Docker 开发环境和测试套件，用于生成 libFuzzer harness、
-编译运行、收集结果，并在前端展示任务状态、artifact、失败原因和覆盖率信息。
+AxF 是一个本地 workflow-system，内置 C 代码 fuzz harness 生成与验证 workflow。
+项目包含 workflow runner、skill、kRepo/knowledge_base 集成、后端 agent、Web 前端、
+Docker 开发环境和测试套件，用于编排知识抽取、harness 生成、编译运行、结果收集
+和前端展示。
 
 ## 优先工作流
 
@@ -23,7 +24,7 @@ docker --context desktop-linux compose -f docker/docker-compose.yml up -d axf-we
 
 ```bash
 docker --context desktop-linux compose -f docker/docker-compose.yml run --rm dev \
-  env -u CLANG python -m unittest
+  python -m unittest discover -s tests -v
 ```
 
 如果模型服务需要宿主机代理，优先通过 `AXF_DOCKER_PROXY` 注入：
@@ -36,6 +37,10 @@ AXF_DOCKER_PROXY=http://host.docker.internal:7897 \
 ## 仓库结构
 
 - `agents/harness_generation/agent.py`：harness 生成、编译、运行、覆盖率统计和模型请求逻辑。
+- `runner/`：AxF workflow 加载、lane 调度、state/events 落盘和 skill 执行。
+- `skills/`：AxF 原子能力包，包含 kRepo 辅助知识抽取和 fuzz harness workflow 步骤。
+- `workflows/`：声明式 workflow，例如 `fuzzing-pipeline.yaml`。
+- `integrations/`：kRepo、AxF 内置 agent 和外部执行能力适配。
 - `frontend/server.py`：Web 后端、任务管理、artifact 暴露和事件流。
 - `frontend/static/`：前端页面、任务状态和覆盖率展示。
 - `docker/`：AxF Docker 镜像和 compose 配置。

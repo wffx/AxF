@@ -1,0 +1,4 @@
+name: krepo-calls
+executor: python
+entrypoint: integrations.krepo_adapter:run_calls_skill
+default_lane: krepo

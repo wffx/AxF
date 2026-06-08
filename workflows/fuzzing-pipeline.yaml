@@ -1,0 +1,54 @@
+name: fuzzing-pipeline
+description: AxF built-in fuzz harness generation workflow with kRepo-backed context skills.
+
+inputs:
+  repo: /linux-7.0
+  function: can_send
+  file: net/can/af_can.c
+
+lanes:
+  control:
+    max_concurrency: 1
+  krepo:
+    max_concurrency: 3
+  llm:
+    max_concurrency: 1
+  build:
+    max_concurrency: 1
+  report:
+    max_concurrency: 1
+
+steps:
+  - id: preflight
+    skill: preflight
+    lane: control
+
+  - id: report
+    skill: krepo-report
+    lane: krepo
+    depends_on: [preflight]
+
+  - id: params
+    skill: krepo-params
+    lane: krepo
+    depends_on: [preflight]
+
+  - id: calls
+    skill: krepo-calls
+    lane: krepo
+    depends_on: [preflight]
+
+  - id: subsource
+    skill: krepo-subsource
+    lane: krepo
+    depends_on: [preflight]
+
+  - id: harness
+    skill: fuzz-harness-gen
+    lane: llm
+    depends_on: [report, params, calls, subsource]
+
+  - id: final_report
+    skill: report-gen
+    lane: report
+    depends_on: [harness]

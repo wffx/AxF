@@ -1,0 +1,4 @@
+name: preflight
+executor: python
+entrypoint: integrations.axf_skills:run_preflight_skill
+default_lane: control

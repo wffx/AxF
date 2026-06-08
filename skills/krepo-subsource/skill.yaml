@@ -1,0 +1,4 @@
+name: krepo-subsource
+executor: python
+entrypoint: integrations.krepo_adapter:run_subsource_skill
+default_lane: krepo

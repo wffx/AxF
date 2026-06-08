@@ -5,6 +5,8 @@ paper_text/
 # Runtime workspace artifacts
 workspace/*
 !workspace/.gitkeep
+state/runs/*
+!state/runs/.gitkeep
 
 # Python caches and test artifacts
 __pycache__/

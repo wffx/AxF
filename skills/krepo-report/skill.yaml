@@ -1,0 +1,4 @@
+name: krepo-report
+executor: python
+entrypoint: integrations.krepo_adapter:run_report_skill
+default_lane: krepo

@@ -1,0 +1,4 @@
+name: krepo-params
+executor: python
+entrypoint: integrations.krepo_adapter:run_params_skill
+default_lane: krepo

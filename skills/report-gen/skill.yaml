@@ -1,0 +1,4 @@
+name: report-gen
+executor: python
+entrypoint: integrations.axf_skills:run_report_skill
+default_lane: report

@@ -12,9 +12,11 @@ services:
     volumes:
       - ..:/workspace
       - ${LINUX_ROOT:-../../linux-7.0}:/linux-7.0
+      - ${KREPO_ROOT:-../../kRepo}:/kRepo:ro
     environment:
       AXF_RUNTIME: docker
       AXF_CONTAINER_SOURCE_ROOT: /linux-7.0
+      KREPO_ROOT: /kRepo
       CLANG: /usr/bin/clang-14
       PYTHONPATH: /workspace:/workspace/knowledge_base
       HTTP_PROXY: ${AXF_DOCKER_PROXY:-}
@@ -36,9 +38,11 @@ services:
     volumes:
       - ..:/workspace
       - ${LINUX_ROOT:-../../linux-7.0}:/linux-7.0
+      - ${KREPO_ROOT:-../../kRepo}:/kRepo:ro
     environment:
       AXF_RUNTIME: docker
       AXF_CONTAINER_SOURCE_ROOT: /linux-7.0
+      KREPO_ROOT: /kRepo
       CLANG: /usr/bin/clang-14
       PYTHONPATH: /workspace:/workspace/knowledge_base
       HTTP_PROXY: ${AXF_DOCKER_PROXY:-}

@@ -1,0 +1,4 @@
+name: fuzz-harness-gen
+executor: python
+entrypoint: integrations.axf_skills:run_harness_generation_skill
+default_lane: llm
